@@ -1,0 +1,24 @@
+# 可选：需要直飞筛选、往返、更多舱位或备用数据源时使用。
+# 此服务需要自己的 SERPAPI_API_KEY，逐日查询会消耗账户额度。
+[monitor]
+timezone = "Asia/Shanghai"
+interval_minutes = 720
+request_delay_seconds = 1.0
+max_requests_per_cycle = 20
+database = "data/serpapi-prices.sqlite3"
+
+[[routes]]
+id = "shanghai-tokyo-roundtrip"
+name = "国际 · 上海浦东 → 东京 · 往返"
+provider = "serpapi"
+market = "international"
+origin = "PVG"                  # SerpApi 使用机场代码；不要把 BJS / TYO 当机场
+destination = "HND,NRT"         # 可同时比较羽田、成田
+currency = "CNY"
+mode = "threshold"
+threshold = 2500                # 一位成人往返总价阈值
+start_offset_days = 14
+end_offset_days = 15
+stay_nights = 5                 # 去程后第 5 天返程；删除这一项即单程
+nonstop = true
+travel_class = 1               # 1 经济舱 / 2 超经 / 3 商务 / 4 头等

@@ -1,0 +1,7 @@
+# 旧版兼容：本例仅适用于显式配置 PushPlus 的服务器，不是免 token 本机微信。
+# 免 token 页面请运行 python3 watch.py --web；桌面微信不能在无桌面的 cron 会话发送。
+# 每 6 小时第 7 分钟执行一次，避免整点拥挤。
+# 先创建日志目录：mkdir -p /home/xel9szh/program/flight-price-watcher/logs
+# 将 /usr/bin/python3 改成 command -v python3 的实际路径（需 Python >=3.11）。
+# 使用 cron 时不要同时启动 --loop / systemd；进程锁会拦截重叠查询。
+7 */6 * * * /usr/bin/python3 /home/xel9szh/program/flight-price-watcher/watch.py --once --notifier pushplus >> /home/xel9szh/program/flight-price-watcher/logs/cron.log 2>&1

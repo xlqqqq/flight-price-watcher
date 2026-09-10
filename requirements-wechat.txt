@@ -1,0 +1,5 @@
+# Optional token-free desktop sending. Install on Windows x64 with Python 3.11-3.13.
+# Maintainer: cluic. Published 2026-09-01; upstream supports WeChat 4.1.8.
+# Package/API provenance: https://pypi.org/project/wxauto4/41.1.7/
+# This is wxauto4, not the separate licensed wxautox4 package.
+wxauto4==41.1.7 ; sys_platform == "win32"

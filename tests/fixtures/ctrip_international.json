@@ -1,0 +1,53 @@
+{
+  "responseStatus": {
+    "Ack": "Success",
+    "Errors": []
+  },
+  "priceList": [
+    {
+      "flightNo": "",
+      "airLine": "",
+      "departDate": "/Date(1788796800000+0800)/",
+      "returnDate": "/Date(-62135798399953+0800)/",
+      "price": 1521.0,
+      "rate": 0,
+      "flag": 0,
+      "totalPrice": 1521.0,
+      "transportPrice": 984.0,
+      "directCalendarText": "",
+      "directCalendarDisplay": false,
+      "fibOrigin": 0,
+      "priceFlag": []
+    },
+    {
+      "flightNo": "",
+      "airLine": "",
+      "departDate": "/Date(1788883200000+0800)/",
+      "returnDate": "/Date(-62135798399953+0800)/",
+      "price": 1086.0,
+      "rate": 0,
+      "flag": 0,
+      "totalPrice": 1086.0,
+      "transportPrice": 237.0,
+      "directCalendarText": "",
+      "directCalendarDisplay": false,
+      "fibOrigin": 1,
+      "priceFlag": []
+    },
+    {
+      "flightNo": "",
+      "airLine": "",
+      "departDate": "/Date(1788969600000+0800)/",
+      "returnDate": "/Date(-62135798399953+0800)/",
+      "price": 962.0,
+      "rate": 0,
+      "flag": 1,
+      "totalPrice": 962.0,
+      "transportPrice": 342.0,
+      "directCalendarText": "",
+      "directCalendarDisplay": false,
+      "fibOrigin": 1,
+      "priceFlag": []
+    }
+  ]
+}

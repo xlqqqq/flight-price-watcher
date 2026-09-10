@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>机票低价提醒 · 本地控制台</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="机票低价提醒首页">
+          <span class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m4 13 16-8-6 16-3-7-7-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m11 14 9-9" stroke="currentColor" stroke-width="1.7"/></svg></span>
+          <span>机票低价提醒<small>FLIGHT WATCHER</small></span>
+        </a>
+        <div class="topbar-status"><span class="local-dot" aria-hidden="true"></span>本地运行<span class="version" id="version"></span></div>
+      </header>
+
+      <main>
+        <section class="intro" aria-labelledby="page-title">
+          <div><p class="eyebrow">国内 / 国际 · 自选日期与查询平台</p><h1 id="page-title">下一趟旅程，<br class="mobile-only">等一个好价格。</h1><p class="intro-copy">选好地点、时间和平台，比较可比的参考总价，也可以持续监控降价。</p></div>
+          <div class="intro-tag"><span aria-hidden="true">✓</span> 机票查询无需 API 密钥</div>
+        </section>
+
+        <div id="connection-error" class="notice notice-error" role="alert" hidden></div>
+        <div id="action-message" class="notice" role="status" aria-live="polite" hidden></div>
+
+        <div class="workspace">
+          <section class="panel settings-panel" aria-labelledby="settings-heading">
+            <div class="panel-heading"><div><p class="section-kicker">YOUR TRIP</p><h2 id="settings-heading">设置我的行程</h2></div><span class="small-tag">成人 · 单程</span></div>
+            <form id="watch-form">
+              <fieldset id="form-fields" disabled>
+                <legend class="sr-only">行程及提醒设置</legend>
+                <div class="route-fields">
+                  <div class="field city-field" id="origin-field">
+                    <label for="origin">出发地</label>
+                    <div class="city-input-wrap"><input id="origin" name="origin" placeholder="搜索城市，如昆明 / kunming" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="origin-options" aria-expanded="false" aria-describedby="origin-hint" required><button type="button" id="origin-clear" class="city-clear" aria-label="清空出发地" title="清空并重新选择出发地" hidden>×</button></div>
+                    <span id="origin-hint" class="field-hint">点击可改，支持中文 / 拼音 / 代码</span>
+                    <div id="origin-popup" class="city-popup" hidden><div id="origin-search-status" class="city-search-status" role="status" aria-live="polite"></div><ul id="origin-options" class="city-options" role="listbox" aria-label="出发城市搜索结果"></ul></div>
+                  </div>
+                  <button type="button" id="swap-cities" class="swap-button" title="交换出发地和目的地" aria-label="交换出发地和目的地">⇄</button>
+                  <div class="field city-field" id="destination-field">
+                    <label for="destination">目的地</label>
+                    <div class="city-input-wrap"><input id="destination" name="destination" placeholder="搜索城市，如大阪 / osaka" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="destination-options" aria-expanded="false" aria-describedby="destination-hint" required><button type="button" id="destination-clear" class="city-clear" aria-label="清空目的地" title="清空并重新选择目的地" hidden>×</button></div>
+                    <span id="destination-hint" class="field-hint">国内和国际城市都可以搜索</span>
+                    <div id="destination-popup" class="city-popup" hidden><div id="destination-search-status" class="city-search-status" role="status" aria-live="polite"></div><ul id="destination-options" class="city-options" role="listbox" aria-label="目的城市搜索结果"></ul></div>
+                  </div>
+                </div>
+                <div class="field"><label for="market">航线类型</label><select id="market" name="market"><option value="auto">根据城市自动识别</option><option value="domestic">国内航线</option><option value="international">国际 / 港澳台航线</option></select><span id="market-hint" class="field-hint">搜索并选择城市后自动识别国内或国际航线。</span></div>
+
+                <div class="field-group"><div class="field"><label for="start-date">最早出发日期</label><input type="date" id="start-date" name="start_date" required></div><div class="field"><label for="end-date">最晚出发日期</label><input type="date" id="end-date" name="end_date" required></div></div>
+                <p id="date-hint" class="field-hint date-hint">在这段时间内选择一天出发，最多比较 31 天。</p>
+
+                <fieldset class="provider-fieldset" aria-describedby="provider-selection-hint"><legend>查询平台</legend><div id="provider-options" class="provider-options"></div><p id="provider-selection-hint" class="field-hint">正在加载可查询的平台…</p></fieldset>
+
+                <div class="form-divider"></div>
+                <h3 class="form-section-title">价格与提醒</h3>
+                <div class="field-group"><div class="field"><label for="mode">提醒条件</label><select id="mode" name="mode"><option value="both">最低价 + 低于目标价</option><option value="threshold">仅低于目标价</option><option value="lowest">最低价汇总</option></select></div><div class="field"><label for="threshold">目标价格 <span class="label-note">CNY</span></label><div class="price-input"><span aria-hidden="true">¥</span><input type="number" id="threshold" name="threshold" min="1" max="1000000" step="0.01" inputmode="decimal" placeholder="例如 800" required></div></div></div>
+                <p id="mode-hint" class="field-hint">价格严格低于目标价时提醒，并定期汇总最低价。</p>
+                <div class="field"><label for="interval">查询间隔</label><select id="interval" name="interval_minutes"><option value="10">每 10 分钟</option><option value="30">每 30 分钟</option><option value="60">每 1 小时</option><option value="180">每 3 小时</option><option value="360">每 6 小时</option><option value="720">每 12 小时</option><option value="1440">每天</option></select></div>
+                <div class="field"><label for="notify">接收提醒的方式</label><select id="notify" name="notify"><option value="wechat">微信文件传输助手 · 免 Token</option><option value="serverchan">微信服务号 · 免费 5 次/天</option><option value="browser">浏览器通知 · 免 Token</option></select></div>
+                <div class="channel-note" id="channel-note"><span id="channel-status" class="channel-status">正在检查通知环境…</span><p id="channel-description"></p><button type="button" id="test-wechat" class="text-button" disabled>发送微信测试消息 <span aria-hidden="true">↗</span></button></div>
+                <section id="serverchan-settings" class="serverchan-settings" aria-labelledby="serverchan-heading" hidden>
+                  <h3 id="serverchan-heading">绑定 Server酱 Turbo 微信服务号</h3>
+                  <p class="serverchan-bind-title">手机微信扫码绑定 · 无需手填密钥</p>
+                  <p class="serverchan-help">生成二维码后，用手机微信扫码，按 Server酱提示关注或授权，再点击“我已扫码，完成绑定”。后台会自动保存推送凭证，无需桌面微信或定期发消息。</p>
+                  <div class="serverchan-actions"><button type="button" id="serverchan-bind-start" class="button button-secondary" disabled>生成绑定二维码</button><button type="button" id="serverchan-bind-cancel" class="button button-compact" disabled>取消绑定</button></div>
+                  <p id="serverchan-bind-message" class="serverchan-help" role="status" aria-live="polite">二维码仅在当前页面显示。绑定不会发送测试消息或启动监控。</p>
+                  <img id="serverchan-bind-qr" class="serverchan-bind-qr" alt="使用手机微信扫描此二维码，按 Server酱提示完成绑定" width="220" height="220" hidden>
+                  <button type="button" id="serverchan-bind-confirm" class="button button-secondary serverchan-bind-confirm" disabled>我已扫码，完成绑定</button>
+                  <p class="field-hint">仅在你点击完成绑定后检查授权结果，不会定期请求扫码状态。扫码失败时可展开下方备用方式。</p>
+                  <details id="serverchan-manual" class="serverchan-manual"><summary>备用方式：手动保存一次免费 SendKey</summary>
+                    <p class="serverchan-help">到 <a href="https://sct.ftqq.com/docs/getting-started/sendkey/" target="_blank" rel="noopener noreferrer">Server酱官网获取免费 SendKey ↗</a>，再粘贴到下方。SendKey 是推送密钥，请勿分享。</p>
+                    <div class="field"><label for="serverchan-sendkey">SendKey <span class="label-note">推送密钥</span></label><input type="password" id="serverchan-sendkey" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="粘贴 SendKey，仅保存到本机" aria-describedby="serverchan-key-hint"><span id="serverchan-key-hint" class="field-hint">保存后输入框会清空，密钥不会显示在页面或行程设置中。</span></div>
+                    <button type="button" id="serverchan-save" class="button button-secondary" disabled>保存密钥</button>
+                  </details>
+                  <button type="button" id="serverchan-clear" class="text-button" disabled>清除本机推送凭证</button>
+                  <p id="serverchan-quota" class="serverchan-quota" role="status" aria-live="polite">完成绑定后显示本程序当天用量。</p>
+                  <p class="serverchan-help">免费额度为每天 5 次。本程序按发送尝试计数，测试和失败也占次数；其他脚本会共用账号的服务额度。达到本程序上限后当天停止发送，次日恢复额度。</p>
+                  <button type="button" id="serverchan-test" class="text-button" disabled>发送微信测试（占 1 次） <span aria-hidden="true">↗</span></button>
+                  <p id="serverchan-operation-hint" class="field-hint">绑定或保存密钥不会发送消息。发送测试后，请到微信服务号确认是否收到。</p>
+                </section>
+
+                <div id="form-error" class="inline-error" role="alert" hidden></div>
+                <div class="form-actions"><button type="submit" id="search-button" class="button button-secondary"><span id="search-label">查询现在的最低价</span></button><button type="button" id="start-button" class="button button-primary">开始监控 <span aria-hidden="true">→</span></button></div>
+                <p class="form-footnote">仅可比总价参与最低价和目标价提醒，成交价及税费以预订页面为准。</p>
+              </fieldset>
+            </form>
+          </section>
+
+          <div class="results-column">
+            <section class="monitor-strip" aria-labelledby="monitor-heading">
+              <div class="monitor-summary"><span id="monitor-dot" class="state-dot" aria-hidden="true"></span><div><h2 id="monitor-heading">尚未开始监控</h2><p id="monitor-detail">先选好行程，随时查询价格。</p></div></div><button type="button" id="stop-button" class="button button-compact" hidden>停止监控</button>
+            </section>
+
+            <section class="panel results-panel" aria-labelledby="results-heading">
+              <div class="panel-heading"><div><p class="section-kicker">FARE COMPARISON</p><h2 id="results-heading">本次查询最低参考总价</h2></div><span id="result-badge" class="small-tag" role="status" aria-live="polite">等待查询</span></div>
+              <div id="source-summary" class="source-summary" hidden><h3 id="source-heading">各平台查询结果</h3><p id="comparison-scope" class="comparison-scope" role="status"></p><ul id="source-list" class="source-list"></ul></div>
+              <div id="results-empty" class="empty-state"><div class="empty-symbol" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="36" rx="7" stroke="currentColor" stroke-width="2"/><path d="M12 27h40M23 12v9M41 12v9M22 37h6M36 37h6M22 44h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3 id="empty-title">好价格，从一段行程开始</h3><p id="empty-copy">选择出发地、目的地和可出发日期，<br>查询国内或国际航班的最低参考价。</p></div>
+              <div id="results-content" hidden>
+                <div id="best-fare" class="best-fare"><div><p id="fare-route" class="fare-route"></p><div class="fare-amount"><span class="currency-symbol">¥</span><strong id="best-price"></strong><span class="price-unit">起 / 人</span></div><p id="best-date" class="best-date"></p><p id="best-source" class="best-source"></p></div><div class="fare-meta"><span id="target-badge" class="target-badge" hidden></span><a id="best-link" class="fare-link" href="#" target="_blank" rel="noopener noreferrer" hidden>去核实价格 <span aria-hidden="true">↗</span></a></div></div>
+                <div id="no-comparable" class="notice no-comparable" hidden>本次暂无可比的参考总价。下方未含税或税费未确认的报价不参与最低价比较和目标价提醒。</div>
+                <p id="price-note" class="price-note"></p>
+                <div class="table-heading"><h3>各日期与平台参考价</h3><span id="query-time"></span></div>
+                <p class="table-scroll-hint">左右滑动表格可查看来源和核实链接。</p>
+                <div class="table-scroll"><table><caption class="sr-only">本次查询各日期和平台报价，人民币，单程参考价；未含税和未确认口径单独标明</caption><thead><tr><th scope="col">出发日期</th><th scope="col">平台参考价</th><th scope="col">来源</th><th scope="col" class="table-link-heading">核实</th></tr></thead><tbody id="quote-rows"></tbody></table></div>
+              </div>
+              <div id="result-error" class="notice notice-error result-notice" role="alert" hidden></div>
+              <div id="result-warnings" class="result-warnings" hidden></div>
+            </section>
+
+            <section class="panel notifications-panel" aria-labelledby="notifications-heading">
+              <div class="panel-heading"><div><p class="section-kicker">PRICE ALERTS</p><h2 id="notifications-heading">提醒记录</h2></div><span id="notification-count" class="count-tag">0</span></div>
+              <p id="notifications-empty" class="notifications-empty">监控触发提醒后，会在这里留下记录。</p><ol id="notification-list" class="notification-list" aria-live="polite" aria-relevant="additions"></ol>
+              <p class="notifications-note">浏览器提醒需要保持此页面打开；文件传输助手需要本机微信登录并保持运行；微信服务号无需桌面微信，受免费额度限制。</p>
+            </section>
+          </div>
+        </div>
+        <footer class="footer"><span>按你的日期，寻找更合适的票价。</span><span>人民币 CNY · 单程参考价 · 未确认口径仅展示</span></footer>
+      </main>
+    </div>
+  </body>
+</html>
