@@ -88,6 +88,16 @@ class WebAppTests(unittest.TestCase):
         self.assertTrue(self.app.latest["error"])
         self.assertFalse(self.app.notifications)
 
+    def test_query_exposes_additional_exact_date_platform_links(self):
+        with patch("flightwatch.webapp.MultiSourceProvider") as provider:
+            provider.return_value.search.return_value = self.prices()
+            self.query()
+        links = self.app.latest["additional_platforms"]
+        self.assertEqual(len(links), 6)
+        self.assertTrue(all(self.input["start_date"] in item["url"]
+                            or date.fromisoformat(self.input["start_date"]).strftime("%y%m%d") in item["url"]
+                            for item in links))
+
     def test_city_lookup_can_return_places_outside_popular_list(self):
         city = dict(name="喀什", code="KHG", country="中国", market="domestic")
         with patch("flightwatch.city_search.search_cities", return_value=[city]) as lookup:

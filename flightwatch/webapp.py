@@ -20,7 +20,7 @@ from .config import Settings, get_timezone, integer, money
 from .models import ConfigError, ProviderError, Route
 from .monitor import run_cycle
 from .notifier import NotificationError
-from .sources import DEFAULT_SOURCES, PROVIDERS, MultiSourceProvider, normalize_sources
+from .sources import DEFAULT_SOURCES, PROVIDERS, MultiSourceProvider, additional_platform_links, normalize_sources
 from .state import State
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -147,7 +147,7 @@ class Dashboard:
         return dict(today=today.isoformat(), max_date=(today + timedelta(days=365)).isoformat(),
                     cities=CITIES, wechat=desktop_status(), defaults=defaults,
                     providers=list(PROVIDERS), serverchan=channel_status(self.data_dir),
-                    serverchan_binding=self._binding_status(), version="2.4.1")
+                    serverchan_binding=self._binding_status(), version="2.5.0")
 
     def city_lookup(self, query: str):
         from .cities import CITIES
@@ -306,6 +306,8 @@ class Dashboard:
             snapshot = dict(queried_at=now_iso(), origin=form["origin"], destination=form["destination"],
                             market=form["market"], start_date=form["start_date"], end_date=form["end_date"],
                             settings=form,
+                            additional_platforms=additional_platform_links(
+                                settings.routes[0], settings.routes[0].departure_dates(datetime.now(TZ).date())[0]),
                             quotes=sorted(quotes, key=lambda q: q["departure_date"]),
                             warnings=result.warnings, sources=result.sources, error=None)
             if not any(q["comparable"] for q in quotes):
@@ -492,7 +494,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Flightwatch/2.4"
+    server_version = "Flightwatch/2.5"
     def log_message(self, *args):
         pass
 

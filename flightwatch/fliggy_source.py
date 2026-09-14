@@ -146,7 +146,7 @@ class FliggyProvider:
 
     def search(self, route: Route, today: date) -> SearchResult:
         if route.market != "domestic":
-            raise ProviderUnsupported("飞猪公开航班数据源目前仅核实了国内航班")
+            raise ProviderUnsupported("飞猪国际搜索会触发滑块验证，后台无法稳定匿名读取报价；可打开本次路线和日期到飞猪核价")
         if route.currency != "CNY":
             raise ProviderUnsupported("飞猪国内公开航班页只提供 CNY 价格")
         if route.stay_nights is not None:

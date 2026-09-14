@@ -293,7 +293,7 @@ class TongchengProvider:
 
     def search(self, route: Route, today: date) -> SearchResult:
         if route.market != "domestic":
-            raise ProviderUnsupported("同程公开网页数据源目前仅支持国内航班")
+            raise ProviderUnsupported("同程国际官网需要动态签名，后台无法稳定匿名读取报价；可打开本次路线和日期到同程核价")
         if route.currency != "CNY":
             raise ProviderUnsupported("同程国内网页只提供 CNY 价格")
         if route.stay_nights is not None:

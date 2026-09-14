@@ -97,7 +97,7 @@
 
             <section class="panel results-panel" aria-labelledby="results-heading">
               <div class="panel-heading"><div><p class="section-kicker">FARE COMPARISON</p><h2 id="results-heading">本次查询最低参考总价</h2></div><span id="result-badge" class="small-tag" role="status" aria-live="polite">等待查询</span></div>
-              <div id="source-summary" class="source-summary" hidden><h3 id="source-heading">各平台查询结果</h3><p id="comparison-scope" class="comparison-scope" role="status"></p><ul id="source-list" class="source-list"></ul></div>
+              <div id="source-summary" class="source-summary" hidden><h3 id="source-heading">各平台查询结果</h3><p id="comparison-scope" class="comparison-scope" role="status"></p><ul id="source-list" class="source-list"></ul><details id="additional-platforms" class="additional-platforms" hidden><summary id="additional-platforms-summary">更多平台核价入口</summary><p>这些平台会要求验证码或动态加载，暂不参与自动最低价；链接已带入本次路线与最早出发日期。</p><div id="additional-platform-links" class="additional-platform-links"></div></details></div>
               <div id="results-empty" class="empty-state"><div class="empty-symbol" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="36" rx="7" stroke="currentColor" stroke-width="2"/><path d="M12 27h40M23 12v9M41 12v9M22 37h6M36 37h6M22 44h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3 id="empty-title">好价格，从一段行程开始</h3><p id="empty-copy">选择出发地、目的地和可出发日期，<br>查询国内或国际航班的最低参考价。</p></div>
               <div id="results-content" hidden>
                 <div id="best-fare" class="best-fare"><div><p id="fare-route" class="fare-route"></p><div class="fare-amount"><span class="currency-symbol">¥</span><strong id="best-price"></strong><span class="price-unit">起 / 人</span></div><p id="best-date" class="best-date"></p><p id="best-source" class="best-source"></p></div><div class="fare-meta"><span id="target-badge" class="target-badge" hidden></span><a id="best-link" class="fare-link" href="#" target="_blank" rel="noopener noreferrer" hidden>去核实价格 <span aria-hidden="true">↗</span></a></div></div>
@@ -109,7 +109,7 @@
                 </div>
               </div>
               <div id="result-error" class="notice notice-error result-notice" role="alert" hidden></div>
-              <div id="result-warnings" class="result-warnings" hidden></div>
+              <details id="result-warnings" class="result-warnings" hidden><summary id="result-warnings-summary">查看本次查询说明</summary><div id="result-warning-items"></div></details>
             </section>
 
             <section class="panel notifications-panel" aria-labelledby="notifications-heading">

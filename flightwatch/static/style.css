@@ -65,6 +65,20 @@
 .source-unsupported .source-status{color:#a78642;background:#faf2de}
 .source-detail{margin:7px 0 0;color:#8595a9;font-size:9px;font-variant-numeric:tabular-nums}
 .source-message{margin:6px 0 0;font-size:9px;color:#a0aabb;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
+.source-more{margin-top:6px}
+.source-more-summary{width:max-content;max-width:100%;cursor:pointer;color:#7188a8;font-size:9px;list-style-position:inside;user-select:none}
+.source-more-summary:hover{color:var(--blue)}
+.source-more[open] .source-more-summary{margin-bottom:4px}
+.source-search-link{display:inline-block;margin-top:6px;font-size:9px;color:#5579ad}
+.source-search-link:hover{text-decoration:underline}
+.additional-platforms{margin-top:11px;border:1px solid #e5ebf3;border-radius:8px;background:#fbfcfe;padding:9px 11px;color:#71839b;font-size:10px}
+.additional-platforms>summary{cursor:pointer;color:#526b8b;font-weight:650;user-select:none}
+.additional-platforms>p{font-size:9px;line-height:1.7;color:#96a3b5;margin:9px 0}
+.additional-platform-links{display:flex;flex-wrap:wrap;gap:7px}
+.additional-platform-link{font-size:9px;color:#5579ad;background:#f1f5fb;border:1px solid #e1e9f4;border-radius:5px;padding:5px 7px}
+.additional-platform-link:hover{color:var(--blue);background:#edf3ff}
+.result-warnings>summary{cursor:pointer;font-weight:650;user-select:none}
+.result-warnings[open]>summary{margin-bottom:6px}
 .best-source{font-size:10px;line-height:1.7;color:#8097bb;margin:7px 0 0}
 .no-comparable{font-size:11px;margin-bottom:0}
 .results-panel table{min-width:470px}

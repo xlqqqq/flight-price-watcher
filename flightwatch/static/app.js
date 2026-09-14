@@ -590,7 +590,7 @@
   function safeBookingUrl(value) {
     try {
       const url = new URL(value);
-      const domains = ["ctrip.com", "ly.com", "qunar.com", "fliggy.com", "google.com", "kiwi.com", "ryanair.com"];
+      const domains = ["ctrip.com", "ly.com", "qunar.com", "fliggy.com", "google.com", "kiwi.com", "ryanair.com", "trip.com", "skyscanner.com", "kayak.com", "momondo.com", "ch.com", "airasia.com"];
       if (url.protocol === "https:" && !url.username && !url.password && (!url.port || url.port === "443") && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) return url.href;
     } catch (_) { /* A missing or invalid link is omitted. */ }
     return null;
@@ -644,18 +644,48 @@
       const card = element("li", `source-card source-${status}`);
       card.dataset.provider = source.id;
       const top = element("div", "source-card-top");
-      top.append(element("strong", "source-name", source.name || providerName(source.id)), element("span", "source-status", statuses[status] || "状态未返回"));
+      const statusText = status === "unsupported" && safeBookingUrl(source.search_url) ? "官网核价" : (statuses[status] || "状态未返回");
+      top.append(element("strong", "source-name", source.name || providerName(source.id)), element("span", "source-status", statusText));
       const matches = comparable.filter((quote) => quote.provider === source.id);
       const quoteCount = Number.isInteger(source.quote_count) && source.quote_count >= 0 ? source.quote_count : quotes.filter((quote) => quote.provider === source.id).length;
       let detail = `${quoteCount} 条报价`;
       if (matches.length) detail += ` · 参考总价 ¥${priceFormat.format(Math.min(...matches.map((quote) => quote.price)))} 起`;
       else if (quoteCount) detail += " · 无可比总价";
       card.append(top, element("p", "source-detail", detail));
-      if (source.message) card.append(element("p", "source-message", source.message));
+      if (source.message) {
+        const more = element("details", "source-more");
+        more.append(element("summary", "source-more-summary", "查看查询详情"), element("p", "source-message", source.message));
+        card.append(more);
+      }
+      const sourceUrl = safeBookingUrl(source.search_url);
+      if (sourceUrl) {
+        const link = element("a", "source-search-link", "打开平台核价 ↗");
+        link.href = sourceUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        card.append(link);
+      }
       fragment.append(card);
     }
     if (!sources.length && latest) fragment.append(element("li", "source-card source-unknown", "本次响应未提供各平台状态。"));
     $("source-list").replaceChildren(fragment);
+    const additional = Array.isArray(latest?.additional_platforms) ? latest.additional_platforms : [];
+    const additionalBox = $("additional-platforms");
+    const additionalFragment = document.createDocumentFragment();
+    for (const platform of additional) {
+      const url = safeBookingUrl(platform.url);
+      if (!url) continue;
+      const link = element("a", "additional-platform-link", `${platform.name} ↗`);
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      additionalFragment.append(link);
+    }
+    const additionalCount = additionalFragment.childNodes.length;
+    $("additional-platform-links").replaceChildren(additionalFragment);
+    $("additional-platforms-summary").textContent = `更多平台核价入口 · ${additionalCount} 个`;
+    additionalBox.hidden = !additionalCount;
+    additionalBox.open = false;
   }
 
   function quoteBasis(quote) {
@@ -709,9 +739,12 @@
     $("result-error").hidden = !latest?.error;
     $("result-error").textContent = latest?.error || "";
     const warningBox = $("result-warnings");
-    warningBox.replaceChildren();
-    for (const warning of (latest?.warnings || [])) warningBox.append(element("p", "", warning));
-    warningBox.hidden = !warningBox.childElementCount;
+    const warningItems = $("result-warning-items");
+    warningItems.replaceChildren();
+    for (const warning of (latest?.warnings || [])) warningItems.append(element("p", "", warning));
+    $("result-warnings-summary").textContent = `查看本次查询说明 · ${warningItems.childElementCount} 条`;
+    warningBox.hidden = !warningItems.childElementCount;
+    warningBox.open = false;
     $("quote-rows").replaceChildren();
     $("daily-lowest-section").hidden = !dailyLowest.length;
     if (!quotes.length) return;

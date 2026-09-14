@@ -7,7 +7,8 @@ from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from flightwatch.models import ConfigError, ProviderError, ProviderUnsupported, Quote, Route, SearchResult
-from flightwatch.sources import MultiSourceProvider, normalize_sources
+from flightwatch.sources import (MultiSourceProvider, additional_platform_links,
+                                 normalize_sources, platform_search_url)
 
 
 DAY = date(2026, 10, 1)
@@ -59,6 +60,28 @@ class MultiSourceTests(unittest.TestCase):
         self.b.search.side_effect = ProviderUnsupported("尚不支持此航线")
         result = self.provider.search(self.route, DAY)
         self.assertEqual(result.sources[1]["status"], "unsupported")
+        self.assertIn("ly.com/flights/itinerary/oneway/BJS-SHA", result.sources[1]["search_url"])
+
+    def test_international_tongcheng_and_fliggy_links_keep_route_and_date(self):
+        route = replace(self.route, origin="SHA", destination="TYO", market="international")
+        tongcheng = platform_search_url("tongcheng", route, DAY)
+        fliggy = platform_search_url("fliggy", route, DAY)
+        self.assertIn("departAirportCode=SHA", tongcheng)
+        self.assertIn("arriveAirportCode=TYO", tongcheng)
+        self.assertIn("2026-10-01", tongcheng)
+        self.assertIn("sijipiao.fliggy.com/ie/", fliggy)
+        self.assertIn("depCity=SHA", fliggy)
+        self.assertIn("arrCity=TYO", fliggy)
+        self.assertIn("depDate=2026-10-01", fliggy)
+
+    def test_additional_platform_links_are_exact_date_https_searches(self):
+        links = additional_platform_links(
+            replace(self.route, origin="SHA", destination="TYO", market="international"), DAY)
+        self.assertEqual([item["name"] for item in links],
+                         ["Trip.com", "Skyscanner", "KAYAK", "momondo", "春秋航空", "AirAsia"])
+        self.assertTrue(all(item["url"].startswith("https://") for item in links))
+        self.assertTrue(all("2026-10-01" in item["url"] or "261001" in item["url"] for item in links))
+        self.assertTrue(all("SHA" in item["url"].upper() and "TYO" in item["url"].upper() for item in links))
 
     def test_wrong_city_and_currency_never_enter_comparison(self):
         self.b.search.return_value = SearchResult([
