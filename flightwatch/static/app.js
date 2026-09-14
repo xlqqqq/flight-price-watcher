@@ -665,6 +665,28 @@
     return "不可比报价 · 不参与比价";
   }
 
+  function dailyLowestQuotes(quotes) {
+    const winners = new Map();
+    for (const quote of quotes) {
+      const date = String(quote.departure_date || "");
+      const current = winners.get(date);
+      if (!current || quote.price < current.price) {
+        winners.set(date, quote);
+        continue;
+      }
+      if (quote.price !== current.price) continue;
+      // 同价时优先保留能安全跳转的平台，再按平台名稳定选择，保证每天只有一行。
+      const quoteHasLink = Boolean(safeBookingUrl(quote.url));
+      const currentHasLink = Boolean(safeBookingUrl(current.url));
+      const quoteLabel = `${providerName(quote.provider)}\u0000${quote.source || ""}`;
+      const currentLabel = `${providerName(current.provider)}\u0000${current.source || ""}`;
+      if ((quoteHasLink && !currentHasLink) || (quoteHasLink === currentHasLink && quoteLabel.localeCompare(currentLabel, "zh-CN") < 0)) {
+        winners.set(date, quote);
+      }
+    }
+    return Array.from(winners.values()).sort((a, b) => String(a.departure_date).localeCompare(String(b.departure_date)));
+  }
+
   function renderResults(latest) {
     const signature = JSON.stringify(latest);
     if (signature === state.resultSignature) return;
@@ -673,7 +695,8 @@
       .filter((quote) => typeof quote.price === "number" && Number.isFinite(quote.price) && quote.price > 0 && (!quote.currency || quote.currency === "CNY"))
       .sort((a, b) => String(a.departure_date).localeCompare(String(b.departure_date)) || Number(a.comparable === false) - Number(b.comparable === false) || a.price - b.price || String(a.source || a.provider).localeCompare(String(b.source || b.provider)));
     const comparable = quotes.filter((quote) => quote.comparable !== false);
-    const best = comparable.length ? comparable.reduce((lowest, quote) => quote.price < lowest.price ? quote : lowest) : null;
+    const dailyLowest = dailyLowestQuotes(comparable);
+    const best = dailyLowest.length ? dailyLowest.reduce((lowest, quote) => quote.price < lowest.price ? quote : lowest) : null;
     renderSources(latest, quotes, comparable);
     $("results-empty").hidden = quotes.length > 0;
     $("results-content").hidden = !quotes.length;
@@ -690,22 +713,30 @@
     for (const warning of (latest?.warnings || [])) warningBox.append(element("p", "", warning));
     warningBox.hidden = !warningBox.childElementCount;
     $("quote-rows").replaceChildren();
+    $("daily-lowest-section").hidden = !dailyLowest.length;
     if (!quotes.length) return;
 
     const startDate = latest.start_date || latest.settings?.start_date;
     const endDate = latest.end_date || latest.settings?.end_date;
     const rangeNote = startDate && endDate ? `查询区间：${friendlyDate(startDate)}至${friendlyDate(endDate)}。` : "";
-    $("price-note").textContent = rangeNote + (best?.price_note || "各平台报价与税费口径可能不同；未含税或不可比报价单独展示，成交价以预订页面为准。");
+    $("price-note").textContent = rangeNote + (best
+      ? "每个出发日期只展示所选平台中可比的最低含税参考总价；其他平台结果见上方状态，成交价以跳转后的预订页面为准。"
+      : "本次只有未含税或口径未确认的参考报价，不能据此判断哪个平台的含税总价最低。");
     $("query-time").textContent = `查询于 ${friendlyTime(latest.queried_at, true)}`;
     if (best) {
       $("fare-route").textContent = `${cityName(latest.origin)} → ${cityName(latest.destination)} · ${latest.market === "domestic" ? "国内" : "国际 / 港澳台"}`;
       $("best-price").textContent = priceFormat.format(best.price);
       const tieDates = new Set(comparable.filter((quote) => quote.price === best.price).map((quote) => quote.departure_date));
       $("best-date").textContent = `${friendlyDate(best.departure_date, true)} 出发${tieDates.size > 1 ? ` · 共 ${tieDates.size} 天同价` : ""}`;
-      $("best-source").textContent = `来源：${best.source || providerName(best.provider)} · 含税参考总价`;
+      const bestProvider = providerName(best.provider);
+      $("best-source").textContent = `最低价 App：${bestProvider} · 含税参考总价`;
       const bestUrl = safeBookingUrl(best.url);
       $("best-link").hidden = !bestUrl;
-      if (bestUrl) $("best-link").href = bestUrl;
+      if (bestUrl) {
+        $("best-link").href = bestUrl;
+        $("best-link").textContent = `去${bestProvider}核价 ↗`;
+        $("best-link").setAttribute("aria-label", `前往${bestProvider}核实最低机票价格`);
+      }
       // Only comparable totals from this query may be compared with its threshold.
       const threshold = latest.settings?.threshold;
       $("target-badge").hidden = !(typeof threshold === "number" && threshold > 0);
@@ -715,14 +746,14 @@
       }
     }
     const fragment = document.createDocumentFragment();
-    for (const quote of quotes) {
-      const isBest = Boolean(best) && quote.comparable !== false && quote.price === best.price;
-      const row = element("tr", isBest ? "best-row" : quote.comparable === false ? "noncomparable-row" : "");
+    for (const quote of dailyLowest) {
+      const isBest = Boolean(best) && quote.price === best.price;
+      const row = element("tr", isBest ? "best-row" : "");
       row.dataset.provider = quote.provider || "";
       const dateCell = element("td");
       const date = element("div", "row-date");
       date.append(element("span", "", friendlyDate(quote.departure_date, true)));
-      if (isBest) date.append(element("span", "best-pill", "最低总价"));
+      date.append(element("span", "best-pill", isBest ? "全程最低" : "当日最低"));
       dateCell.append(date);
       const priceCell = element("td", "quote-price");
       const basis = element("span", "quote-basis", quoteBasis(quote));
@@ -733,16 +764,22 @@
         if (quote.exchange_date && quote.exchange_rate) original.title = `${quote.exchange_date} 参考汇率：1 ${quote.original_currency} = ${quote.exchange_rate} CNY`;
         priceCell.append(original);
       }
-      const sourceName = quote.source || providerName(quote.provider);
-      row.append(dateCell, priceCell, element("td", "quote-source", sourceName));
+      const appName = providerName(quote.provider);
+      const sourceCell = element("td", "quote-source", appName);
+      if (quote.source && quote.source !== appName) sourceCell.title = `数据来源：${quote.source}`;
+      const samePriceApps = new Set(comparable
+        .filter((item) => item.departure_date === quote.departure_date && item.price === quote.price)
+        .map((item) => item.provider || item.source));
+      if (samePriceApps.size > 1) sourceCell.append(element("span", "quote-basis", `另有 ${samePriceApps.size - 1} 个 App 同价`));
+      row.append(dateCell, priceCell, sourceCell);
       const linkCell = element("td");
       const url = safeBookingUrl(quote.url);
       if (url) {
-        const link = element("a", "", "查看 ↗");
+        const link = element("a", "", `去${appName}核价 ↗`);
         link.href = url;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.setAttribute("aria-label", `在${sourceName}核实 ${quote.departure_date} 出发的机票价格`);
+        link.setAttribute("aria-label", `在${appName}核实 ${quote.departure_date} 出发的最低机票价格`);
         linkCell.append(link);
       } else linkCell.textContent = "—";
       row.append(linkCell);

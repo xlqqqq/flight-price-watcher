@@ -101,11 +101,12 @@
               <div id="results-empty" class="empty-state"><div class="empty-symbol" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="36" rx="7" stroke="currentColor" stroke-width="2"/><path d="M12 27h40M23 12v9M41 12v9M22 37h6M36 37h6M22 44h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3 id="empty-title">好价格，从一段行程开始</h3><p id="empty-copy">选择出发地、目的地和可出发日期，<br>查询国内或国际航班的最低参考价。</p></div>
               <div id="results-content" hidden>
                 <div id="best-fare" class="best-fare"><div><p id="fare-route" class="fare-route"></p><div class="fare-amount"><span class="currency-symbol">¥</span><strong id="best-price"></strong><span class="price-unit">起 / 人</span></div><p id="best-date" class="best-date"></p><p id="best-source" class="best-source"></p></div><div class="fare-meta"><span id="target-badge" class="target-badge" hidden></span><a id="best-link" class="fare-link" href="#" target="_blank" rel="noopener noreferrer" hidden>去核实价格 <span aria-hidden="true">↗</span></a></div></div>
-                <div id="no-comparable" class="notice no-comparable" hidden>本次暂无可比的参考总价。下方未含税或税费未确认的报价不参与最低价比较和目标价提醒。</div>
+                <div id="no-comparable" class="notice no-comparable" hidden>本次暂无可比的含税参考总价。未含税或口径未确认的报价不会被选作最低价，请查看上方平台状态。</div>
                 <p id="price-note" class="price-note"></p>
-                <div class="table-heading"><h3>各日期与平台参考价</h3><span id="query-time"></span></div>
-                <p class="table-scroll-hint">左右滑动表格可查看来源和核实链接。</p>
-                <div class="table-scroll"><table><caption class="sr-only">本次查询各日期和平台报价，人民币，单程参考价；未含税和未确认口径单独标明</caption><thead><tr><th scope="col">出发日期</th><th scope="col">平台参考价</th><th scope="col">来源</th><th scope="col" class="table-link-heading">核实</th></tr></thead><tbody id="quote-rows"></tbody></table></div>
+                <div id="daily-lowest-section"><div class="table-heading"><h3>每天最便宜的 App</h3><span id="query-time"></span></div>
+                  <p class="table-scroll-hint">左右滑动表格可查看 App 和跳转入口。</p>
+                  <div class="table-scroll"><table><caption class="sr-only">每个出发日期在所选平台中的最低含税参考总价、对应 App 和核价入口</caption><thead><tr><th scope="col">出发日期</th><th scope="col">当日最低参考总价</th><th scope="col">最便宜的 App</th><th scope="col" class="table-link-heading">跳转核价</th></tr></thead><tbody id="quote-rows"></tbody></table></div>
+                </div>
               </div>
               <div id="result-error" class="notice notice-error result-notice" role="alert" hidden></div>
               <div id="result-warnings" class="result-warnings" hidden></div>
