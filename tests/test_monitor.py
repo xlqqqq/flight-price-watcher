@@ -85,6 +85,22 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.notifier.send.assert_not_called()
         self.assertIsNone(self.state.last_alert(self.route.state_key(), "threshold"))
 
+    def test_airport_monitor_never_alerts_for_cheaper_other_airport(self):
+        route = monitored_route(origin="PEK", destination="PVG", origin_scope="airport",
+            destination_scope="airport", origin_city_code="BJS", destination_city_code="SHA")
+        settings = replace(self.settings, routes=(route,))
+        self.source.search.return_value = SearchResult([
+            quote("1", route, origin_airport="PKX"),
+            quote("2", route, destination_airport="SHA"),
+            quote("3", route, origin_airport=""),
+            quote("1200", route)], [])
+        self.run_cycle(settings=settings)
+        self.notifier.send.assert_not_called()
+        self.source.search.return_value = SearchResult([quote("800", route)], [])
+        self.run_cycle(settings=settings)
+        self.assertIn("800.00", self.content())
+        self.assertIn("PEK → PVG", self.content())
+
     def test_strictly_under_threshold_sends_cheapest_and_persists_receipt(self):
         self.source.search.return_value = SearchResult([quote("950"), quote("800"), quote("900")], [])
         self.assertEqual(self.run_cycle(), 0)

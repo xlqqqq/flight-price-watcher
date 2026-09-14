@@ -287,13 +287,15 @@ class TongchengProvider:
     def _international_page_url(route: Route, day: date) -> str:
         params = {
             "advanced": "false",
-            "departAirportCode": route.origin,
-            "arriveAirportCode": route.destination,
             "para": (
-                f"{route.origin}*{route.destination}*{day.isoformat()}**"
+                f"{route.city_code('origin')}*{route.city_code('destination')}*{day.isoformat()}**"
                 "OW*1_0_0*Y|S|C|F"
             ),
         }
+        if route.origin_scope == "airport":
+            params["departAirportCode"] = route.origin
+        if route.destination_scope == "airport":
+            params["arriveAirportCode"] = route.destination
         return "https://www.ly.com/iflight/book1.html?" + urllib.parse.urlencode(params)
 
     @staticmethod
@@ -409,10 +411,6 @@ class TongchengProvider:
         return data
 
     def search(self, route: Route, today: date) -> SearchResult:
-        if route.market == "international" and (route.origin_scope == "airport" or route.destination_scope == "airport"):
-            raise ProviderUnsupported(
-                "本程序接入的同程国际日历只有城市最低价，尚未接入国际航班机场筛选；不代表同程不支持该机场"
-            )
         if route.currency != "CNY":
             raise ProviderUnsupported("同程公开网页只提供 CNY 价格")
         if route.stay_nights is not None:
@@ -428,6 +426,9 @@ class TongchengProvider:
         if not dates:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
         if route.market == "international":
+            if route.origin_scope == "airport" or route.destination_scope == "airport":
+                from .tongcheng_international_source import search_airports
+                return search_airports(self, route, dates)
             data = self._request_international_calendar(route, min(dates))
             return self._parse_international(data, route, set(dates))
         if route.market != "domestic":

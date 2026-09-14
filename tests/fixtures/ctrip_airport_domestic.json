@@ -1,0 +1,173 @@
+{
+  "listData": {
+    "dcode": "SHA",
+    "acode": "BJS",
+    "ddate": "2026-09-21",
+    "triptype": 1,
+    "errorMsg": "",
+    "flights": [
+      {
+        "flightItem": {
+          "flights": [
+            {
+              "flightNo": "KN5978",
+              "dtime": "2026-09-21 08:15:00",
+              "atime": "2026-09-21 10:25:00",
+              "duration": 130,
+              "daySpan": 0,
+              "sequence": 1,
+              "segment": 1,
+              "isShared": false,
+              "sharedFlightNo": null,
+              "airline": {
+                "code": "KN",
+                "name": "中国联合航空",
+                "shortName": "中联航"
+              },
+              "stops": [],
+              "dport": {
+                "code": "PVG",
+                "name": "浦东",
+                "cityName": "上海",
+                "cityCode": "SHA",
+                "terminal": "T1",
+                "fullName": "浦东国际机场",
+                "isMultiPort": true,
+                "newPort": false,
+                "showPort": false
+              },
+              "aport": {
+                "code": "PKX",
+                "name": "大兴",
+                "cityName": "北京",
+                "cityCode": "BJS",
+                "terminal": "",
+                "fullName": "大兴国际机场",
+                "isMultiPort": true,
+                "newPort": false,
+                "showPort": false
+              },
+              "craft": {
+                "name": "波音737",
+                "type": "中",
+                "kind": "M",
+                "kindName": ""
+              },
+              "needTransitVisa": false
+            }
+          ],
+          "pl": [
+            {
+              "price": 400,
+              "departDate": "2026-09-21",
+              "returnDate": "",
+              "policy": null,
+              "jumpUrl": "https://m.ctrip.com/html5/flight/pages/middle?dcode=SHA&dname=%E4%B8%8A%E6%B5%B7&acode=BJS&aname=%E5%8C%97%E4%BA%AC&ddate=2026-09-21&tripType=ONE_WAY&regionType=DOMESTIC&searchKey=KLUv/SC8tQQAokkhITCFbg4A57gJQNr+26dHEQoznl6I7WpBPV7fjRU4WBgY498k7SlTFzYZcPq+DBjlUXzf3Mi4h7osS3Y9fNQgEovD97x1UdU4A2B6iOznI3B4QgNxc7XlxtXhY1wF2SVGSHIw8RAkMfmeq6wODzmF77maBkwOXN3ynrSnHWvNTSeAasn0XgQAWpmsjJHqwtgemykz&channel=112",
+              "isContainsTax": false,
+              "decRate": null,
+              "rate": 0.25,
+              "prePrice": null,
+              "currency": "CNY",
+              "weatherInfo": null,
+              "className": "经济舱",
+              "departDateType": 0,
+              "returnDateType": 0,
+              "departDateDiffDay": 0,
+              "specialPrice": 0,
+              "decPrice": 0,
+              "originPrice": 0,
+              "freeLuggage": false,
+              "specialChannelPrice": false,
+              "lplJumpUrl": "",
+              "tax": 0,
+              "eprice": 0,
+              "etax": 0,
+              "compensatePrice": ""
+            }
+          ]
+        }
+      },
+      {
+        "flightItem": {
+          "flights": [
+            {
+              "flightNo": "MU5123",
+              "dtime": "2026-09-21 19:00:00",
+              "atime": "2026-09-21 21:15:00",
+              "duration": 135,
+              "daySpan": 0,
+              "sequence": 1,
+              "segment": 1,
+              "isShared": false,
+              "sharedFlightNo": null,
+              "airline": {
+                "code": "MU",
+                "name": "东方航空",
+                "shortName": "东航"
+              },
+              "stops": [],
+              "dport": {
+                "code": "SHA",
+                "name": "虹桥",
+                "cityName": "上海",
+                "cityCode": "SHA",
+                "terminal": "T2",
+                "fullName": "虹桥国际机场",
+                "isMultiPort": true,
+                "newPort": false,
+                "showPort": false
+              },
+              "aport": {
+                "code": "PEK",
+                "name": "首都",
+                "cityName": "北京",
+                "cityCode": "BJS",
+                "terminal": "T2",
+                "fullName": "首都国际机场",
+                "isMultiPort": true,
+                "newPort": false,
+                "showPort": false
+              },
+              "craft": {
+                "name": "空客330",
+                "type": "大",
+                "kind": "L",
+                "kindName": ""
+              },
+              "needTransitVisa": false
+            }
+          ],
+          "pl": [
+            {
+              "price": 500,
+              "departDate": "2026-09-21",
+              "returnDate": "",
+              "policy": null,
+              "jumpUrl": "https://m.ctrip.com/html5/flight/pages/middle?dcode=SHA&dname=%E4%B8%8A%E6%B5%B7&acode=BJS&aname=%E5%8C%97%E4%BA%AC&ddate=2026-09-21&tripType=ONE_WAY&regionType=DOMESTIC&searchKey=KLUv/SC8xQQAoskhIzCHbA4AdNs1HaIKXaPu0BOqotFytHomLk50ZmX8gYKGggoO2+PsKUMTNQPcs50QYUEA4PvmgQpboEmSZNe7N8mC0VB8z1fWVIsrAqZ3cD8Xg7sfEoYbqy0vju7+3r63CGxgPJB3GOKL33OV0d0ZBfE9RzNByYOpW15z9jRjq7GpFEAtmV4LBABamayMkerC2B6bKTM=&channel=112",
+              "isContainsTax": false,
+              "decRate": null,
+              "rate": 0.24,
+              "prePrice": null,
+              "currency": "CNY",
+              "weatherInfo": null,
+              "className": "经济舱",
+              "departDateType": 0,
+              "returnDateType": 0,
+              "departDateDiffDay": 0,
+              "specialPrice": 0,
+              "decPrice": 0,
+              "originPrice": 0,
+              "freeLuggage": false,
+              "specialChannelPrice": false,
+              "lplJumpUrl": "",
+              "tax": 0,
+              "eprice": 0,
+              "etax": 0,
+              "compensatePrice": ""
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

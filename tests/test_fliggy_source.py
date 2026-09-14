@@ -305,10 +305,11 @@ class FliggyTransportTests(unittest.TestCase):
         )
         with patch.object(provider, "_request") as request, \
                 patch.object(provider, "_request_month_calendar") as calendar, \
-                self.assertRaises(ProviderUnsupported):
+                patch.object(provider, "_search_international_airports") as listing:
             provider.search(airport_international, INTL_DAY)
         request.assert_not_called()
         calendar.assert_not_called()
+        listing.assert_called_once_with(airport_international, [INTL_DAY])
 
     def test_domestic_airport_scope_uses_owner_city_and_requires_owner(self):
         route = replace(

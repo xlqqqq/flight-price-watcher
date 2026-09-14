@@ -21,7 +21,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from .models import ProviderError, ProviderUnsupported, Quote, Route, SearchResult
+from .models import ProviderError, Quote, Route, SearchResult
 
 
 ENDPOINT = (
@@ -60,20 +60,29 @@ def calendar_date(value: object) -> date:
 
 class CtripCalendarProvider:
     def __init__(self, timeout: float = 30, request_delay: float = 1.0,
-                 max_requests: int = 60):
+                 max_requests: int = 60, *, cancelled=None):
         self.timeout = timeout
         self.request_delay = request_delay
         self.max_requests = max_requests
         self.requests_used = 0
         self._last_request: float | None = None
+        self.cancelled = cancelled
+
+    def _check_cancelled(self):
+        if self.cancelled is not None and self.cancelled():
+            raise ProviderError("携程查询已取消")
 
     def _request(self, payload: dict) -> dict:
+        self._check_cancelled()
         if self.requests_used >= self.max_requests:
             raise ProviderError("携程查询已达到本轮请求上限")
         if self._last_request is not None:
             wait = self.request_delay - (time.monotonic() - self._last_request)
-            if wait > 0:
-                time.sleep(wait)
+            while wait > 0:
+                self._check_cancelled()
+                time.sleep(min(wait, 0.1))
+                wait = self.request_delay - (time.monotonic() - self._last_request)
+        self._check_cancelled()
         self.requests_used += 1
         self._last_request = time.monotonic()
         request = urllib.request.Request(
@@ -104,13 +113,11 @@ class CtripCalendarProvider:
             raise ProviderError("携程返回非 JSON 内容，可能是验证页面或接口已变化") from None
         if not isinstance(data, dict):
             raise ProviderError("携程响应根节点不是对象，接口可能已变化")
+        self._check_cancelled()
         return data
 
     def search(self, route: Route, today: date) -> SearchResult:
-        if route.origin_scope == "airport" or route.destination_scope == "airport":
-            raise ProviderUnsupported(
-                "本程序接入的携程日历只有城市最低价，尚未接入携程航班机场筛选；不代表携程不支持该机场"
-            )
+        self._check_cancelled()
         if route.currency != "CNY":
             raise ProviderError("携程日历仅支持 CNY，不会将其他币种当作人民币")
         if route.stay_nights is not None:
@@ -124,6 +131,17 @@ class CtripCalendarProvider:
         if not all(re.fullmatch(r"[A-Z]{3}", value)
                    for value in (route.origin, route.destination)):
             raise ProviderError("携程日历须使用单个三字母城市代码（例如 SHA、BJS、TYO）")
+        if route.origin_scope == "airport" or route.destination_scope == "airport":
+            from .ctrip_airport_source import CtripAirportProvider
+            provider = CtripAirportProvider(
+                timeout=self.timeout, request_delay=self.request_delay,
+                max_requests=max(0, self.max_requests - self.requests_used),
+                cancelled=self.cancelled,
+            )
+            try:
+                return provider.search(route, today)
+            finally:
+                self.requests_used += provider.requests_used
         dates = route.departure_dates(today)
         if not dates:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])

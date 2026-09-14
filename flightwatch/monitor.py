@@ -63,6 +63,8 @@ def run_cycle(settings: Settings, providers: dict, state: State, notifier=None,
         dates = set(route.departure_dates(now.date()))
         valid = [q for q in result.quotes if q.comparable and q.currency == route.currency
                  and q.origin == route.origin and q.destination == route.destination
+                 and (route.origin_scope != "airport" or q.origin_airport == route.origin)
+                 and (route.destination_scope != "airport" or q.destination_airport == route.destination)
                  and q.departure_date in dates and q.return_date == route.return_on(q.departure_date)]
         if not valid:
             LOG.warning("%s：未查到匹配条件的有效价格；这不代表没有航班。", route.name)

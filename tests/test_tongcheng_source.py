@@ -123,10 +123,12 @@ class TongchengPriceTests(unittest.TestCase):
         route = replace(ROUTE, origin="PEK", origin_scope="airport", origin_city_code="BJS")
         self.assertEqual(TongchengProvider()._parse(state(), route, DAY).quotes, [])
 
-    def test_international_calendar_limitation_is_not_a_platform_airport_claim(self):
+    def test_international_airport_query_uses_real_list_adapter(self):
         route = replace(INTL_ROUTE, origin="PVG", origin_scope="airport", origin_city_code="SHA")
-        with self.assertRaisesRegex(ProviderUnsupported, "本程序.*不代表同程不支持"):
+        from flightwatch.models import SearchResult
+        with patch("flightwatch.tongcheng_international_source.search_airports", return_value=SearchResult([], [])) as query:
             TongchengProvider().search(route, INTL_DAY)
+        self.assertEqual(query.call_args.args[1], route)
 
     def setUp(self):
         self.provider = TongchengProvider(request_delay=0)

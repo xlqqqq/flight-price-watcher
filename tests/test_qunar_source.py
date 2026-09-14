@@ -11,7 +11,10 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from flightwatch.models import ProviderError, ProviderUnsupported, Route
-from flightwatch.qunar_source import ENDPOINT, SUGGEST_ENDPOINT, QunarCalendarProvider
+from flightwatch.qunar_source import (
+    ENDPOINT, SUGGEST_ENDPOINT, INTERNATIONAL_FLIGHTS_ENDPOINT,
+    DOMESTIC_FLIGHTS_ENDPOINT, QunarCalendarProvider,
+)
 
 
 TODAY = date(2026, 9, 8)
@@ -205,6 +208,157 @@ class QunarTransportTests(unittest.TestCase):
             with self.subTest(body=body), patch("flightwatch.qunar_source.urllib.request.urlopen", return_value=io.BytesIO(body)):
                 with self.assertRaises(ProviderError):
                     provider._request(ENDPOINT, {})
+
+
+class QunarAirportFlightTests(unittest.TestCase):
+    """Contracts from Qunar's current public list JavaScript, not live fares."""
+
+    def setUp(self):
+        self.provider = QunarCalendarProvider(request_delay=0)
+        self.origin = {"name": "上海", "code": "SHA", "is_international": False,
+                       "airports": {"PVG": "浦东机场", "SHA": "虹桥机场"}}
+        self.destination = {"name": "济州岛", "code": "CJU", "is_international": True,
+                            "airports": {"CJU": "济州国际机场"}}
+        self.route = Route("pvg-cju", "浦东济州", "PVG", "CJU", "qunar",
+                           market="international", dates=(DOMESTIC_DAY,),
+                           origin_scope="airport", destination_scope="airport",
+                           origin_city_code="SHA", destination_city_code="CJU")
+        self.provider._resolve_city = Mock(side_effect=[self.origin, self.destination])
+
+    def flight(self, dep="PVG", arr="CJU", day=DOMESTIC_DAY, amount=600, **price_fields):
+        segment = {"depAirportCode": dep, "arrAirportCode": arr,
+                   "depCityCode": "SHA", "arrCityCode": "CJU", "depDate": day.isoformat(),
+                   "carrierShortName": "测试航空"}
+        return {"journey": {"code": "9C0000", "flightCode": f"9C0000|{dep}-{arr}|{day}",
+                            "journeyType": "ONEWAY", "ticketInsufficient": False,
+                            "trips": [{"flightSegments": [segment]}]},
+                "price": {"lowTotalPrice": amount, "currencyCode": "CNY",
+                          "totalTaxType": 1, **price_fields}}
+
+    def response(self, *rows, complete=True, query="test-query", dep="上海", arr="济州岛"):
+        return {"status": 0, "result": {"ctrlInfo": {"queryId": query,
+            "completed": complete, "interval": 0, "dep": {"cityZh": dep},
+            "arr": {"cityZh": arr}}, "flightPrices": {str(i): item for i, item in enumerate(rows)}}}
+
+    def test_airport_search_uses_owner_cities_and_official_filters(self):
+        self.provider._request = Mock(return_value=self.response(self.flight()))
+        result = self.provider.search(self.route, TODAY)
+        self.assertEqual(self.provider._resolve_city.call_args_list[0].args, ("SHA",))
+        endpoint, params = self.provider._request.call_args.args
+        self.assertEqual(endpoint, INTERNATIONAL_FLIGHTS_ENDPOINT)
+        self.assertEqual((params["depAirport"], params["arrAirport"]), ("PVG", "CJU"))
+        self.assertEqual((params["depCity"], params["arrCity"]), ("上海", "济州岛"))
+        self.assertEqual((params["adultNum"], params["childNum"]), (1, 0))
+        self.assertNotIn("retDate", params)
+        self.assertEqual(result.quotes[0].origin_airport, "PVG")
+        self.assertEqual(result.quotes[0].destination_airport, "CJU")
+        self.assertEqual(result.quotes[0].price_basis, "total")
+        link = parse_qs(urlparse(result.quotes[0].url).query)
+        self.assertEqual(link["searchDepartureTime"], [DOMESTIC_DAY.isoformat()])
+        self.assertIn("PVG-CJU", link["filterFlightCode"][0])
+
+    def test_mixed_city_and_airport_only_sets_selected_side_filter(self):
+        self.provider._request = Mock(return_value=self.response(self.flight(dep="SHA")))
+        route = replace(self.route, origin="SHA", origin_scope="city")
+        result = self.provider.search(route, TODAY)
+        params = self.provider._request.call_args.args[1]
+        self.assertNotIn("depAirport", params)
+        self.assertEqual(params["arrAirport"], "CJU")
+        self.assertEqual(result.quotes[0].origin_airport, "SHA")
+
+    def test_only_matching_airport_and_departure_date_prices_survive(self):
+        rows = [self.flight(), self.flight(dep="SHA", amount=100),
+                self.flight(day=date(2026, 10, 14), amount=90), self.flight(arr="ICN", amount=70)]
+        result = self.provider._parse_international_flights(rows, self.route, DOMESTIC_DAY,
+                                                            self.origin, self.destination)
+        self.assertEqual([q.price for q in result.quotes], [Decimal(600)])
+        self.assertIn("3 条", result.warnings[0])
+
+    def test_round_trip_unknown_tax_other_currency_and_missing_airports(self):
+        wrong_trip = self.flight(); wrong_trip["journey"]["journeyType"] = "ROUNDTRIP"
+        rows = [wrong_trip, self.flight(currencyCode="USD"), self.flight(totalTaxType=0)]
+        result = self.provider._parse_international_flights(rows, self.route, DOMESTIC_DAY,
+                                                            self.origin, self.destination)
+        self.assertEqual(len(result.quotes), 1)
+        self.assertFalse(result.quotes[0].comparable)
+        wrong_airport = self.flight(); wrong_airport["journey"]["trips"][0]["flightSegments"][0].pop("depAirportCode")
+        with self.assertRaisesRegex(ProviderError, "机场代码"):
+            self.provider._parse_international_flights([wrong_airport], self.route, DOMESTIC_DAY,
+                                                        self.origin, self.destination)
+
+    def test_delta_poll_replaces_old_cheaper_price(self):
+        self.provider._request = Mock(side_effect=[self.response(self.flight(amount=500), complete=False),
+                                                  self.response(self.flight(amount=700))])
+        result = self.provider.search(self.route, TODAY)
+        self.assertEqual([q.price for q in result.quotes], [Decimal(700)])
+        self.assertEqual(self.provider._request.call_args.args[1]["queryId"], "test-query")
+
+    def test_wrong_route_cache_live_shape_stops_all_other_dates(self):
+        route = replace(self.route, dates=(DOMESTIC_DAY, date(2026, 10, 16)))
+        self.provider._request = Mock(return_value=self.response(complete=False, dep="北京", arr="名古屋"))
+        with self.assertRaisesRegex(ProviderError, "回显了其他城市"):
+            self.provider.search(route, TODAY)
+        self.provider._request.assert_called_once()
+
+    def test_incomplete_or_different_query_never_publishes_partial_minimum(self):
+        self.provider._request = Mock(return_value=self.response(self.flight(), complete=False))
+        with self.assertRaisesRegex(ProviderError, "未完成"):
+            self.provider._international_day(self.route, DOMESTIC_DAY, self.origin, self.destination)
+        self.assertEqual(self.provider._request.call_count, 4)
+        self.provider._request = Mock(side_effect=[self.response(self.flight(), complete=False),
+                                                  self.response(query="other-query")])
+        with self.assertRaisesRegex(ProviderError, "标识改变"):
+            self.provider._international_day(self.route, DOMESTIC_DAY, self.origin, self.destination)
+
+    def test_login_slider_and_invalid_status_fail_before_polling(self):
+        for payload in ({"needLogin": True}, {"needSlider": True}, {"isLimit": True}, {"status": False}):
+            self.provider._request = Mock(return_value=payload)
+            with self.subTest(payload=payload), self.assertRaises(ProviderError):
+                self.provider._international_day(self.route, DOMESTIC_DAY, self.origin, self.destination)
+            self.provider._request.assert_called_once()
+
+    def domestic_flight(self, airport="浦东机场", price=500, **extra):
+        return {"flightType": "list", "minPrice": price, "code": "MU0000",
+                "binfo": {"depCity": "上海", "arrCity": "北京", "depAirport": airport,
+                          "arrAirport": "首都机场", "depDate": DOMESTIC_DAY.isoformat(), **extra}}
+
+    def test_domestic_actual_airport_names_are_verified_before_minimum(self):
+        destination = {"name": "北京", "code": "PEK", "is_international": False,
+                       "airports": {"PEK": "首都机场", "PKX": "大兴机场"}}
+        route = replace(self.route, market="domestic", destination="PEK", destination_city_code="BJS")
+        payload = {"ret": True, "data": {"flights": [self.domestic_flight(),
+                                                       self.domestic_flight("虹桥机场", 100)]}}
+        result = self.provider._parse_domestic_flights(payload, route, DOMESTIC_DAY, self.origin, destination)
+        self.assertEqual([q.price for q in result.quotes], [Decimal(500)])
+        self.assertEqual(result.quotes[0].origin_airport, "PVG")
+        self.assertEqual(result.quotes[0].destination_airport, "PEK")
+        self.assertFalse(result.quotes[0].comparable)
+
+    def test_domestic_empty_anonymous_live_response_is_not_no_inventory(self):
+        self.provider._resolve_city = Mock(side_effect=[self.origin,
+            {"name": "北京", "code": "PEK", "is_international": False}])
+        self.provider._request = Mock(return_value={"ret": True, "code": -1, "data": {
+            "allFilter": [], "min_flight": {}, "flights": [], "total": 0, "geographyInfo": {}}})
+        route = replace(self.route, market="domestic", destination="PEK", destination_city_code="BJS")
+        with self.assertRaisesRegex(ProviderError, "未返回可验证"):
+            self.provider.search(route, TODAY)
+        self.assertEqual(self.provider._request.call_args.args[0], DOMESTIC_FLIGHTS_ENDPOINT)
+        self.assertTrue(self.provider._request.call_args.kwargs["post"])
+
+    def test_missing_owning_city_cannot_substitute_airport_as_city(self):
+        with self.assertRaisesRegex(ProviderUnsupported, "所属城市"):
+            self.provider.search(replace(self.route, origin_city_code=""), TODAY)
+        self.provider._resolve_city.assert_not_called()
+
+    def test_domestic_post_preserves_request_budget_without_token(self):
+        provider = QunarCalendarProvider(request_delay=0)
+        with patch("flightwatch.qunar_source.urllib.request.urlopen", return_value=io.BytesIO(b'{"ret":true}')) as opener:
+            provider._request(DOMESTIC_FLIGHTS_ENDPOINT, {"departureCity": "上海"}, post=True)
+        request = opener.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(parse_qs(request.data.decode()), {"departureCity": ["上海"]})
+        self.assertFalse(request.has_header("Cookie"))
+        self.assertEqual(provider.requests_used, 1)
 
 
 if __name__ == "__main__":

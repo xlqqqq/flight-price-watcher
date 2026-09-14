@@ -37,9 +37,12 @@ natural month replaces a per-day search, so when the month view succeeds even
 a year-long range needs only about thirteen requests.  The calendar does not
 return a flight number or fare rules;
 its result is a current platform low-price reference that must be confirmed on
-the linked result page.  The detailed international listing endpoint currently
-returns Fliggy's slide challenge to anonymous server requests, and this module
-does not attempt to evade that access control.
+the linked result page. Airport-specific international routes instead use the
+official flight_search_result_poller.do listing and filter actual first/last
+flight segment airports. The listed adult price, adult tax and total adult
+price must agree. The listing currently returns Fliggy's slide challenge to
+anonymous server requests; it is reported explicitly and remaining dates are
+stopped. This module does not evade access controls or substitute city prices.
 
 The month view occasionally responds with an explicit ``success:false`` while
 the same official seven-day view remains available.  Only for that explicit
@@ -69,6 +72,8 @@ from .models import ProviderError, ProviderUnsupported, Quote, Route, SearchResu
 
 ENDPOINT = "https://sjipiao.fliggy.com/searchow/search.htm"
 INTERNATIONAL_CALENDAR_ENDPOINT = "https://r.fliggy.com/cheapestCalendar/pc"
+INTERNATIONAL_LIST_ENDPOINT = "https://sijipiao.fliggy.com/ie/flight_search_result_poller.do"
+MAX_INTERNATIONAL_POLLS = 4
 _CALLBACK = "flightwatch"
 _MAX_RESPONSE_BYTES = 8_000_000
 _USER_AGENT = (
@@ -79,6 +84,10 @@ _USER_AGENT = (
 
 class _CalendarServiceRejected(ProviderError):
     """The endpoint explicitly declined this calendar shape, not bad data."""
+
+
+class _VerificationRequired(ProviderError):
+    """Stop this source's date loop when the website requests verification."""
 
 
 def _city_query_code(route: Route, side: str) -> str:
@@ -174,7 +183,14 @@ class FliggyProvider:
                     body = compressed.read(_MAX_RESPONSE_BYTES + 1)
                 if len(body) > _MAX_RESPONSE_BYTES:
                     raise ProviderError("飞猪解压响应超过大小限制")
-            return parse_jsonp(body.decode("utf-8"))
+            text = body.decode("utf-8")
+            if not text.lstrip().startswith(_CALLBACK + "(") and any(
+                    marker in text for marker in ("_____tmd_____", "__baxia__", "punishFlowType")):
+                raise _VerificationRequired(
+                    "飞猪官网要求安全验证，本轮未取得航班明细；已暂停后续日期，"
+                    "不会用城市日历价格代替指定机场价格"
+                )
+            return parse_jsonp(text)
         except urllib.error.HTTPError as exc:
             raise ProviderError(f"飞猪返回 HTTP {exc.code}，可能需要稍后重试") from None
         except (urllib.error.URLError, OSError, http.client.HTTPException, EOFError) as exc:
@@ -230,6 +246,87 @@ class FliggyProvider:
     def _request_week_calendar(self, route: Route, first_day: date) -> dict:
         return self._request_calendar(route, first_day, "0")
 
+    def _request_international_listing(self, route: Route, day: date,
+                                       continuation: dict | None = None) -> dict:
+        """Use the public page's DEP request, with its explicit economy option.
+
+        Search whole owning cities and verify actual segments locally. The
+        website's airport code in a city calendar query is not an airport filter.
+        Only transient continuation values returned by this request are reused.
+        """
+        journey = [{
+            "depCityCode": _city_query_code(route, "origin"),
+            "arrCityCode": _city_query_code(route, "destination"),
+            "depCityName": "", "arrCityName": "", "depDate": day.isoformat(),
+            "selectedFlights": [],
+        }]
+        params = {
+            "supportMultiTrip": "true", "searchBy": "",
+            "childPassengerNum": "0", "infantPassengerNum": "0",
+            "searchJourney": json.dumps(journey, separators=(",", ":")),
+            "tripType": "0", "searchCabinType": "1", "controller": "1",
+            "searchMode": "0", "b2g": "0", "formNo": "-1", "cardId": "",
+            "needMemberPrice": "false", "callback": _CALLBACK,
+        }
+        if continuation:
+            params.update(continuation)
+        self._before_request()
+        return self._open_jsonp(urllib.request.Request(
+            INTERNATIONAL_LIST_ENDPOINT + "?" + urllib.parse.urlencode(params),
+            headers={"User-Agent": _USER_AGENT, "Referer": self._booking_url(route, day)},
+        ))
+
+    def _international_day(self, route: Route, day: date) -> SearchResult:
+        continuation = None
+        for count in range(MAX_INTERNATIONAL_POLLS):
+            response = self._request_international_listing(route, day, continuation)
+            if response.get("status") != 200 or not isinstance(response.get("data"), dict):
+                raise ProviderError("飞猪国际航班明细未确认查询成功，未将错误响应作为报价")
+            data = response["data"]
+            if data.get("isContinue") is False:
+                return self._parse_international_listing(data, route, day)
+            if data.get("isContinue") is not True:
+                raise ProviderError("飞猪国际航班明细缺少明确完成状态")
+            if count + 1 == MAX_INTERNATIONAL_POLLS:
+                break
+            token, record = data.get("iesToken"), data.get("queryRecordId", "")
+            if (not isinstance(token, str) or not token or len(token) > 4096
+                    or not isinstance(record, str) or len(record) > 1024
+                    or any(ord(char) < 32 for char in token + record)):
+                raise ProviderError("飞猪国际航班明细缺少有效查询续页信息")
+            delay = _amount(data.get("delayForNextPoll", 0), "轮询间隔")
+            if delay > 2000:
+                raise ProviderError("飞猪国际航班明细仍在查询，等待时间超过本轮预算")
+            if delay:
+                time.sleep(float(delay) / 1000)
+            continuation = {"iesToken": token, "queryRecordId": record, "count": str(count + 1)}
+        raise ProviderError("飞猪国际航班明细在本轮请求预算内未完成，未发布中间报价")
+
+    def _search_international_airports(self, route: Route, dates: list[date]) -> SearchResult:
+        quotes, warnings = [], []
+        succeeded = 0
+        for day in dates:
+            try:
+                self._check_cancelled()
+            except ProviderError as exc:
+                warnings.append(str(exc))
+                break
+            if self.requests_used >= self.max_requests:
+                warnings.append("飞猪国际航班明细已达到本轮请求上限，剩余日期未查询")
+                break
+            try:
+                result = self._international_day(route, day)
+                succeeded += 1
+                quotes.extend(result.quotes)
+                warnings.extend(result.warnings)
+            except ProviderError as exc:
+                warnings.append(f"{day}：{exc}")
+                if isinstance(exc, _VerificationRequired) or not succeeded:
+                    break
+        if not succeeded:
+            raise ProviderError("；".join(warnings) or "飞猪国际航班明细未取得有效数据")
+        return SearchResult(quotes, list(dict.fromkeys(warnings)))
+
     def search(self, route: Route, today: date) -> SearchResult:
         if route.market not in {"domestic", "international"}:
             raise ProviderUnsupported("飞猪需要明确国内或国际航线")
@@ -244,11 +341,6 @@ class FliggyProvider:
         if not all(isinstance(code, str) and re.fullmatch(r"[A-Z]{3}", code)
                    for code in (route.origin, route.destination)):
             raise ProviderError("飞猪查询须使用三字母城市或机场代码")
-        if route.market == "international" and (
-                route.origin_scope == "airport" or route.destination_scope == "airport"):
-            raise ProviderUnsupported(
-                "本程序接入的飞猪国际日历不返回实际机场，尚未接入国际航班机场筛选；不代表飞猪不支持该机场"
-            )
         # Validate scope and required owning-city metadata before any request.
         _city_query_code(route, "origin")
         _city_query_code(route, "destination")
@@ -256,6 +348,8 @@ class FliggyProvider:
         if not dates:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
         if route.market == "international":
+            if route.origin_scope == "airport" or route.destination_scope == "airport":
+                return self._search_international_airports(route, dates)
             return self._search_international(route, dates)
         return self._search_domestic(route, dates)
 
@@ -543,4 +637,97 @@ class FliggyProvider:
             )
         if not candidates:
             warnings.append(f"{day} 飞猪暂无可确认的普通成人含税报价，不能据此判断售罄")
+        return SearchResult([min(candidates, key=lambda quote: quote.price)] if candidates else [], warnings)
+
+    def _parse_international_listing(self, data: dict, route: Route, day: date) -> SearchResult:
+        """Parse the public J_FlightItemsTmpl/J_FlightDetailTmpl data contract.
+
+        Never infer actual airports from the searched cities, flight numbers or
+        a calendar low price. The first and last real flight segment establish
+        the requested endpoints; intermediate airports are not destinations.
+        """
+        if data.get("isContinue") is not False or not isinstance(data.get("flightItems"), list):
+            raise ProviderError("飞猪国际航班明细结构发生变化或查询尚未完成")
+        candidates, excluded_airports, restricted = [], 0, 0
+        for item in data["flightItems"]:
+            if not isinstance(item, dict):
+                raise ProviderError("飞猪国际航班明细包含无效条目")
+            journeys = item.get("flightInfo")
+            if not isinstance(journeys, list) or len(journeys) != 1:
+                raise ProviderError("飞猪国际航班明细并非所选单程行程")
+            info = journeys[0]
+            segments = info.get("flightSegments") if isinstance(info, dict) else None
+            if (not isinstance(segments, list) or not 1 <= len(segments) <= 8
+                    or not all(isinstance(segment, dict) for segment in segments)):
+                raise ProviderError("飞猪国际航班明细缺少实际航段")
+            first, last = segments[0], segments[-1]
+            for segment in segments:
+                for field in ("depAirportCode", "arrAirportCode", "depCityCode", "arrCityCode"):
+                    if not isinstance(segment.get(field), str) or not re.fullmatch(
+                            r"[A-Z]{3}", segment[field]):
+                        raise ProviderError("飞猪国际航段缺少有效城市或实际机场代码")
+            if (first["depCityCode"] != _city_query_code(route, "origin")
+                    or last["arrCityCode"] != _city_query_code(route, "destination")):
+                raise ProviderError("飞猪国际航班明细城市与所选行程不一致")
+            try:
+                departure = datetime.fromisoformat(first["depTimeStr"])
+            except (KeyError, TypeError, ValueError):
+                raise ProviderError("飞猪国际航班明细出发时间格式发生变化") from None
+            if departure.date() != day:
+                raise ProviderError("飞猪国际航班明细日期与所选日期不一致")
+            origin_airport, destination_airport = first["depAirportCode"], last["arrAirportCode"]
+            if ((route.origin_scope == "airport" and origin_airport != route.origin)
+                    or (route.destination_scope == "airport" and destination_airport != route.destination)):
+                excluded_airports += 1
+                continue
+            # The request selects economy and disables member prices. Also
+            # reject conditions displayed alongside an offer, including fares
+            # with a promoted reduction whose eligibility is not verified.
+            if (item.get("priceDesc") or item.get("promotionShowInfos")
+                    or item.get("morePriceVO") or item.get("fareSource") == 19
+                    or any(item.get(flag) for flag in ("hasMemberPrice", "memberPrice", "notices"))):
+                restricted += 1
+                continue
+            quantity = item.get("quantity")
+            if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+                restricted += 1
+                continue
+            if item.get("currency", "CNY") != "CNY":
+                raise ProviderError("飞猪国际航班明细币种与 CNY 不一致")
+            fare = _amount(item.get("adultPrice"), "国际成人票价 adultPrice")
+            tax = _amount(item.get("adultTax"), "国际成人税费 adultTax")
+            total = _amount(item.get("totalAdultPrice"), "国际成人含税价 totalAdultPrice")
+            if total != fare + tax:
+                raise ProviderError("飞猪国际成人含税总价与票价加税费不一致")
+            if not fare or not total:
+                continue
+            numbers = [segment.get("marketingFlightNo") for segment in segments]
+            if not all(isinstance(number, str) and re.fullmatch(r"[A-Z0-9]{2}[0-9]{1,5}[A-Z]?", number)
+                       for number in numbers):
+                raise ProviderError("飞猪国际航班号字段发生变化")
+            url = self._booking_url(route, day)
+            if len(segments) == 1:
+                # This public page bridge selects the returned flight and
+                # opens its sellers. It does not place an order or hold seats.
+                url += "&" + urllib.parse.urlencode({
+                    "pcOtaMode": "1", "pcTripType": "0", "pcLeaveFlightNo": numbers[0],
+                })
+            candidates.append(Quote(
+                origin=route.origin, destination=route.destination, departure_date=day,
+                price=total, currency="CNY", source="飞猪国际公开航班搜索",
+                provider="fliggy", price_basis="total", url=url,
+                origin_airport=origin_airport, destination_airport=destination_airport,
+                flight_number=" / ".join(numbers),
+                airline=info.get("mainAirlineName", "") if isinstance(info.get("mainAirlineName", ""), str) else "",
+                price_note=(f"飞猪国际单程经济舱成人参考价：票价 {fare} + 税费 {tax} 元；"
+                            f"已按实际起降机场 {origin_airport} → {destination_airport} 筛选；"
+                            "行李、预订限制及最终可售价格请在飞猪购票页确认"),
+            ))
+        warnings = []
+        if excluded_airports:
+            warnings.append(f"{day} 飞猪国际已排除 {excluded_airports} 条实际机场不匹配的航班")
+        if restricted:
+            warnings.append(f"{day} 飞猪国际已排除 {restricted} 条附条件、特殊产品或余票不明的报价")
+        if not candidates:
+            warnings.append(f"{day} 飞猪国际暂无可核实的所选机场含税报价，不能据此判断售罄")
         return SearchResult([min(candidates, key=lambda quote: quote.price)] if candidates else [], warnings)

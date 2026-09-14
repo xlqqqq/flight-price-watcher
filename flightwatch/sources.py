@@ -12,10 +12,10 @@ from .models import ConfigError, ProviderError, ProviderUnsupported, Route, Sear
 
 
 PROVIDERS = (
-    {"id": "ctrip", "name": "携程", "group": "国内旅行平台", "description": "国内/国际低价日历参考总价"},
-    {"id": "tongcheng", "name": "同程", "group": "国内旅行平台", "description": "国内航班含税参考价；国际 1 成人单程含税低价日历"},
-    {"id": "qunar", "name": "去哪儿", "group": "国内旅行平台", "description": "国内/国际公开低价日历；国内未含税价单独展示"},
-    {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "国内普通成人含税价；国际 1 成人单程含税低价日历"},
+    {"id": "ctrip", "name": "携程", "group": "国内旅行平台", "description": "城市低价日历；指定机场航班查询，国际含税、国内票面参考"},
+    {"id": "tongcheng", "name": "同程", "group": "国内旅行平台", "description": "国内/国际航班机场筛选；国际城市日历，列表受限时显示原因"},
+    {"id": "qunar", "name": "去哪儿", "group": "国内旅行平台", "description": "国内/国际日历与机场航班查询；国内票面参考，国际核对含税价"},
+    {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "国内/国际航班机场筛选和含税价；官网验证时显示原因"},
     {"id": "trip", "name": "Trip.com", "group": "海外旅行平台", "description": "官网匿名逐日搜索，1 成人经济舱单程含税总价"},
     {"id": "skyscanner", "name": "Skyscanner", "group": "海外旅行平台", "description": "官网匿名逐日完整搜索，核对含税价与供应商入口"},
     {"id": "google_flights", "name": "Google Flights", "group": "海外旅行平台", "description": "逐日搜索，1 成人经济舱单程含税参考价"},
@@ -43,13 +43,8 @@ def platform_search_url(name: str, route: Route, day: date) -> str:
     origin, destination = route.origin.upper(), route.destination.upper()
     if name == "tongcheng":
         if route.market == "international":
-            params = {
-                "advanced": "false", "departureCity": _city_name(origin),
-                "arrivalCity": _city_name(destination), "departAirportCode": origin,
-                "arriveAirportCode": destination,
-                "para": f"{origin}*{destination}*{day.isoformat()}**OW*1_0_0*Y|S|C|F",
-            }
-            return "https://www.ly.com/iflight/book1.html?" + urllib.parse.urlencode(params)
+            from .tongcheng_source import TongchengProvider
+            return TongchengProvider._international_page_url(route, day)
         return f"https://www.ly.com/flights/itinerary/oneway/{origin}-{destination}?" + urllib.parse.urlencode({"date": day.isoformat()})
     if name == "fliggy":
         root = "https://sijipiao.fliggy.com/ie/flight_search_result.htm" if route.market == "international" else "https://sjipiao.fliggy.com/flight_search_result.htm"
@@ -90,6 +85,16 @@ def platform_search_url(name: str, route: Route, day: date) -> str:
 def estimate_requests(name, route, days):
     if not days:
         return 0
+    airport_scope = route.origin_scope == "airport" or route.destination_scope == "airport"
+    if airport_scope:
+        if name == "ctrip":
+            return len(days)
+        if name == "qunar":
+            return 2 + (4 if route.market == "international" else 1) * len(days)
+        if name == "tongcheng" and route.market == "international":
+            return 2 + 5 * len(days)
+        if name == "fliggy" and route.market == "international":
+            return 4 * len(days)
     if name == "tongcheng" and route.market != "domestic":
         # The international calendar returns the next 91 days in one response.
         return 1
@@ -175,7 +180,7 @@ def make_public_provider(name, timeout=30, request_delay=1.0, max_requests=60, *
         cls = AirAsiaProvider
     else:
         raise ConfigError("未知公开数据源")
-    kwargs = {"cancelled": cancelled} if name != "ctrip" else {}
+    kwargs = {"cancelled": cancelled}
     return cls(timeout=timeout, request_delay=request_delay, max_requests=max_requests, **kwargs)
 
 
@@ -214,9 +219,11 @@ class MultiSourceProvider:
                 quotes = [replace(q, provider=name) for q in result.quotes
                           if q.origin == route.origin and q.destination == route.destination
                           and q.currency == route.currency and q.departure_date in wanted
-                          and q.return_date == route.return_on(q.departure_date)]
+                          and q.return_date == route.return_on(q.departure_date)
+                          and (route.origin_scope != "airport" or q.origin_airport == route.origin)
+                          and (route.destination_scope != "airport" or q.destination_airport == route.destination)]
                 if len(quotes) != len(result.quotes):
-                    warnings.append("已排除与航线、日期、币种或行程不匹配的报价")
+                    warnings.append("已排除与航线、实际机场、日期、币种或行程不匹配的报价")
                 warnings.extend(result.warnings)
                 comparable = [q for q in quotes if q.comparable]
                 report.update(status="ok" if quotes else "empty", quote_count=len(quotes),

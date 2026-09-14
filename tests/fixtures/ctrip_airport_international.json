@@ -1,0 +1,219 @@
+{
+  "listData": {
+    "dcode": "SHA",
+    "acode": "CJU",
+    "ddate": "2026-09-21",
+    "triptype": 1,
+    "errorMsg": "",
+    "flights": [
+      {
+        "flightItem": {
+          "flights": [
+            {
+              "flightNo": "9C8573",
+              "dtime": "2026-09-21 20:05:00",
+              "atime": "2026-09-21 22:30:00",
+              "duration": 85,
+              "daySpan": 0,
+              "sequence": 1,
+              "segment": 1,
+              "isShared": false,
+              "sharedFlightNo": null,
+              "airline": {
+                "code": "9C",
+                "name": "春秋航空",
+                "shortName": "春秋"
+              },
+              "stops": [],
+              "dport": {
+                "code": "PVG",
+                "name": "浦东",
+                "cityName": "上海",
+                "cityCode": "SHA",
+                "terminal": "T2",
+                "fullName": "浦东国际机场",
+                "isMultiPort": true,
+                "newPort": false,
+                "showPort": false
+              },
+              "aport": {
+                "code": "CJU",
+                "name": "济州",
+                "cityName": "济州岛",
+                "cityCode": "CJU",
+                "terminal": null,
+                "fullName": "济州国际机场",
+                "isMultiPort": false,
+                "newPort": false,
+                "showPort": false
+              },
+              "craft": {
+                "name": "空客320",
+                "type": "中",
+                "kind": "M",
+                "kindName": ""
+              },
+              "needTransitVisa": false
+            }
+          ],
+          "pl": [
+            {
+              "price": 280,
+              "departDate": "2026-09-21",
+              "returnDate": "",
+              "policy": null,
+              "jumpUrl": "https://m.ctrip.com/html5/flight/swift/international/cabinlist?type=1-0-0&isshare=true&ddate=2026-09-21&triptype=1&acode=CJU&dofltno=&dcode=SHA&dfltno=9C8573&lowPrice=280&source=fuzzysearch_2&Channel=10002048&LowPriceChannel=LowPriceChannel_10002048&subMark=10002048",
+              "isContainsTax": true,
+              "decRate": null,
+              "rate": 0,
+              "prePrice": null,
+              "currency": "CNY",
+              "weatherInfo": null,
+              "className": "经济舱",
+              "departDateType": 0,
+              "returnDateType": 0,
+              "departDateDiffDay": 0,
+              "specialPrice": 0,
+              "decPrice": 0,
+              "originPrice": 0,
+              "freeLuggage": false,
+              "specialChannelPrice": false,
+              "lplJumpUrl": "",
+              "tax": 0,
+              "eprice": 0,
+              "etax": 0,
+              "compensatePrice": ""
+            }
+          ]
+        }
+      },
+      {
+        "flightItem": {
+          "flights": [
+            {
+              "flightNo": "7C8352",
+              "dtime": "2026-09-21 04:05:00",
+              "atime": "2026-09-21 06:40:00",
+              "duration": 95,
+              "daySpan": 0,
+              "sequence": 1,
+              "segment": 1,
+              "isShared": false,
+              "sharedFlightNo": null,
+              "airline": {
+                "code": "7C",
+                "name": "济州航空",
+                "shortName": "济州航空"
+              },
+              "stops": [],
+              "dport": {
+                "code": "PVG",
+                "name": "浦东",
+                "cityName": "上海",
+                "cityCode": "SHA",
+                "terminal": "T2",
+                "fullName": "浦东国际机场",
+                "isMultiPort": true,
+                "newPort": false,
+                "showPort": false
+              },
+              "aport": {
+                "code": "PUS",
+                "name": "金海",
+                "cityName": "釜山",
+                "cityCode": "PUS",
+                "terminal": "I",
+                "fullName": "金海国际机场",
+                "isMultiPort": false,
+                "newPort": false,
+                "showPort": false
+              },
+              "craft": {
+                "name": "波音737",
+                "type": "中",
+                "kind": "M",
+                "kindName": ""
+              },
+              "needTransitVisa": false
+            },
+            {
+              "flightNo": "LJ569",
+              "dtime": "2026-09-21 19:00:00",
+              "atime": "2026-09-21 20:00:00",
+              "duration": 60,
+              "daySpan": 0,
+              "sequence": 2,
+              "segment": 1,
+              "isShared": false,
+              "sharedFlightNo": null,
+              "airline": {
+                "code": "LJ",
+                "name": "真航空",
+                "shortName": "真航空"
+              },
+              "stops": [],
+              "dport": {
+                "code": "PUS",
+                "name": "金海",
+                "cityName": "釜山",
+                "cityCode": "PUS",
+                "terminal": "D",
+                "fullName": "金海国际机场",
+                "isMultiPort": false,
+                "newPort": false,
+                "showPort": false
+              },
+              "aport": {
+                "code": "CJU",
+                "name": "济州",
+                "cityName": "济州岛",
+                "cityCode": "CJU",
+                "terminal": null,
+                "fullName": "济州国际机场",
+                "isMultiPort": false,
+                "newPort": false,
+                "showPort": false
+              },
+              "craft": {
+                "name": "波音737",
+                "type": "中",
+                "kind": "M",
+                "kindName": ""
+              },
+              "needTransitVisa": false
+            }
+          ],
+          "pl": [
+            {
+              "price": 817,
+              "departDate": "2026-09-21",
+              "returnDate": "",
+              "policy": null,
+              "jumpUrl": "https://m.ctrip.com/html5/flight/swift/international/cabinlist?type=1-0-0&isshare=true&ddate=2026-09-21.2026-09-21&triptype=1&acode=CJU&dofltno=.&dcode=SHA.PUS&dfltno=7C8352.LJ569&lowPrice=817&source=fuzzysearch_2&Channel=10002048&LowPriceChannel=LowPriceChannel_10002048&subMark=10002048",
+              "isContainsTax": true,
+              "decRate": null,
+              "rate": 0,
+              "prePrice": null,
+              "currency": "CNY",
+              "weatherInfo": null,
+              "className": "经济舱",
+              "departDateType": 0,
+              "returnDateType": 0,
+              "departDateDiffDay": 0,
+              "specialPrice": 0,
+              "decPrice": 0,
+              "originPrice": 0,
+              "freeLuggage": false,
+              "specialChannelPrice": false,
+              "lplJumpUrl": "",
+              "tax": 0,
+              "eprice": 0,
+              "etax": 0,
+              "compensatePrice": ""
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
