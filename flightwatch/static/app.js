@@ -844,7 +844,8 @@
     try {
       const url = new URL(value);
       const domains = ["ctrip.com", "ly.com", "qunar.com", "fliggy.com", "google.com", "kiwi.com", "ryanair.com", "trip.com", "skyscanner.com", "skyscanner.com.sg", "kayak.com", "momondo.com", "ch.com", "airasia.com"];
-      if (url.protocol === "https:" && !url.username && !url.password && (!url.port || url.port === "443") && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) return url.href;
+      const allowedHost = url.hostname === "router.feizhu.com" || domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+      if (url.protocol === "https:" && !url.username && !url.password && (!url.port || url.port === "443") && allowedHost) return url.href;
     } catch (_) { /* A missing or invalid link is omitted. */ }
     return null;
   }

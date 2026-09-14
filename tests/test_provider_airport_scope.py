@@ -29,7 +29,7 @@ class AirportScopeTests(unittest.TestCase):
 
     def test_airport_list_budgets_cover_dates_and_polls(self):
         days = [DAY, date(2026, 10, 16)]
-        expected = {"ctrip":2, "qunar":10, "tongcheng":12, "fliggy":8}
+        expected = {"ctrip":2, "qunar":10, "tongcheng":12, "fliggy":12}
         for name, count in expected.items():
             self.assertEqual(estimate_requests(name, ROUTE, days), count)
 

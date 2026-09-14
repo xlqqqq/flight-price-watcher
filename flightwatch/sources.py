@@ -15,7 +15,7 @@ PROVIDERS = (
     {"id": "ctrip", "name": "携程", "group": "国内旅行平台", "description": "城市低价日历；指定机场航班查询，国际含税、国内票面参考"},
     {"id": "tongcheng", "name": "同程", "group": "国内旅行平台", "description": "国内/国际航班机场筛选；国际城市日历，列表受限时显示原因"},
     {"id": "qunar", "name": "去哪儿", "group": "国内旅行平台", "description": "国内/国际日历与机场航班查询；国内票面参考，国际核对含税价"},
-    {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "国内/国际航班机场筛选和含税价；官网验证时显示原因"},
+    {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "官网航班与官方 AI API 备用查询；实际机场筛选，税费未确认仅参考"},
     {"id": "trip", "name": "Trip.com", "group": "海外旅行平台", "description": "官网匿名逐日搜索，1 成人经济舱单程含税总价"},
     {"id": "skyscanner", "name": "Skyscanner", "group": "海外旅行平台", "description": "官网匿名逐日完整搜索，核对含税价与供应商入口"},
     {"id": "google_flights", "name": "Google Flights", "group": "海外旅行平台", "description": "逐日搜索，1 成人经济舱单程含税参考价"},
@@ -94,7 +94,8 @@ def estimate_requests(name, route, days):
         if name == "tongcheng" and route.market == "international":
             return 2 + 5 * len(days)
         if name == "fliggy" and route.market == "international":
-            return 4 * len(days)
+            # Ordinary page + four list polls + optional official FlyAI call.
+            return 6 * len(days)
     if name == "tongcheng" and route.market != "domestic":
         # The international calendar returns the next 91 days in one response.
         return 1
@@ -181,6 +182,8 @@ def make_public_provider(name, timeout=30, request_delay=1.0, max_requests=60, *
     else:
         raise ConfigError("未知公开数据源")
     kwargs = {"cancelled": cancelled}
+    if name == "fliggy":
+        kwargs["use_flyai"] = True
     return cls(timeout=timeout, request_delay=request_delay, max_requests=max_requests, **kwargs)
 
 
@@ -228,8 +231,10 @@ class MultiSourceProvider:
                 comparable = [q for q in quotes if q.comparable]
                 report.update(status="ok" if quotes else "empty", quote_count=len(quotes),
                     lowest_price=float(min(q.price for q in comparable)) if comparable else None)
-                if quotes and quotes[0].url:
-                    report["search_url"] = quotes[0].url
+                if quotes:
+                    cheapest = min(comparable or quotes, key=lambda q: (q.price, q.departure_date))
+                    if cheapest.url:
+                        report["search_url"] = cheapest.url
                 if quotes and not comparable:
                     warnings.append("未获得可核实总价；展示报价但不参与最低总价及阈值提醒")
                 if not quotes:

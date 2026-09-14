@@ -13,8 +13,10 @@ https://g.alicdn.com/trip/iflight-search/1.10.94/mods/week-price/oneway-min.js
 The homepage links to sjipiao.fliggy.com/flight_search_result.htm, which
 redirects to /homeow/trip_flight_search.htm. Its config and loader explicitly
 use /searchow/search.htm. The verified anonymous GET needs no cookie, login,
-API key, session token or generated browser fingerprint. Remote JS is only
-read as documentation, never executed by this provider.
+API key, session token or generated browser fingerprint. The HTTP transport
+reads remote JS only as documentation. An optional ordinary browser transport
+loads the official page; an optional official FlyAI CLI supplies references
+when international airport listing dates cannot be read.
 
 The official flight model computes tax = oilPrice + buildPrice. We add that
 returned tax to cabin.price, NOT ticketPrice or conditional bestPrice.
@@ -47,8 +49,9 @@ stopped. This module does not evade access controls or substitute city prices.
 The month view occasionally responds with an explicit ``success:false`` while
 the same official seven-day view remains available.  Only for that explicit
 service refusal do we fall back to non-overlapping seven-day windows.  Network,
-schema, route, link and amount validation failures are never hidden by a
-fallback.
+schema, route, link and amount validation failures do not trigger a different
+calendar shape. International airport API fallback preserves the website
+failure reason and separately validates all returned flight references.
 """
 
 from __future__ import annotations
@@ -57,6 +60,7 @@ import gzip
 import http.client
 import io
 import json
+import os
 import re
 import time
 import urllib.error
@@ -133,15 +137,31 @@ def _amount(value, field: str) -> Decimal:
     return amount
 
 
+def _listing_amount(value, field: str) -> Decimal:
+    """International listing amounts are integer fen, per the site's price filter."""
+    if isinstance(value, bool) or value is None or not isinstance(value, (str, int, Decimal)):
+        raise ProviderError(f"飞猪缺少有效 {field}，不能确认含税总价")
+    try:
+        cents = Decimal(str(value))
+    except InvalidOperation:
+        raise ProviderError(f"飞猪 {field} 不是有效金额") from None
+    if (not cents.is_finite() or cents < 0 or cents > 100_000_000
+            or cents != cents.to_integral_value()):
+        raise ProviderError(f"飞猪 {field} 必须是有效整数分金额")
+    return cents / 100
+
+
 class FliggyProvider:
     def __init__(self, timeout: float = 30, request_delay: float = 1.0,
-                 max_requests: int = 60, *, cancelled: Callable[[], bool] | None = None):
+                 max_requests: int = 60, *, cancelled: Callable[[], bool] | None = None,
+                 use_flyai: bool = False):
         self.timeout = timeout
         self.request_delay = request_delay
         self.max_requests = max_requests
         self.requests_used = 0
         self._last_request: float | None = None
         self.cancelled = cancelled
+        self.use_flyai = use_flyai
 
     def _check_cancelled(self) -> None:
         if self.cancelled is not None and self.cancelled():
@@ -265,7 +285,7 @@ class FliggyProvider:
             "childPassengerNum": "0", "infantPassengerNum": "0",
             "searchJourney": json.dumps(journey, separators=(",", ":")),
             "tripType": "0", "searchCabinType": "1", "controller": "1",
-            "searchMode": "0", "b2g": "0", "formNo": "-1", "cardId": "",
+            "searchMode": "0", "agentId": "-1", "b2g": "0", "formNo": "-1", "cardId": "",
             "needMemberPrice": "false", "callback": _CALLBACK,
         }
         if continuation:
@@ -295,7 +315,7 @@ class FliggyProvider:
                     or any(ord(char) < 32 for char in token + record)):
                 raise ProviderError("飞猪国际航班明细缺少有效查询续页信息")
             delay = _amount(data.get("delayForNextPoll", 0), "轮询间隔")
-            if delay > 2000:
+            if delay > 5000:
                 raise ProviderError("飞猪国际航班明细仍在查询，等待时间超过本轮预算")
             if delay:
                 time.sleep(float(delay) / 1000)
@@ -303,6 +323,38 @@ class FliggyProvider:
         raise ProviderError("飞猪国际航班明细在本轮请求预算内未完成，未发布中间报价")
 
     def _search_international_airports(self, route: Route, dates: list[date]) -> SearchResult:
+        website_error = None
+        try:
+            if os.environ.get("FLIGHTWATCH_FLIGGY_BROWSER") == "1":
+                from .fliggy_browser import FliggyBrowserSession
+                with FliggyBrowserSession(self) as browser:
+                    result = self._search_international_airport_days(route, dates, browser.search_day)
+            else:
+                result = self._search_international_airport_days(route, dates, self._international_day)
+        except ProviderError as exc:
+            website_error = exc
+            result = SearchResult([], [str(exc)])
+        self._check_cancelled()
+        missing = [day for day in dates if day not in {q.departure_date for q in result.quotes}]
+        if self.use_flyai and missing:
+            from .flyai_source import available, search_flyai
+            if available():
+                try:
+                    extra = search_flyai(self, route, missing)
+                    return SearchResult(result.quotes + extra.quotes,
+                        list(dict.fromkeys(result.warnings + extra.warnings)))
+                except ProviderError as exc:
+                    self._check_cancelled()
+                    if website_error:
+                        raise ProviderError(f"{website_error}；飞猪官方 API 备用查询：{exc}") from None
+                    result.warnings.append(f"飞猪官方 API 备用查询：{exc}")
+        if website_error:
+            raise website_error
+        return result
+
+    def _search_international_airport_days(
+        self, route: Route, dates: list[date], search_day: Callable[[Route, date], SearchResult]
+    ) -> SearchResult:
         quotes, warnings = [], []
         succeeded = 0
         for day in dates:
@@ -315,7 +367,7 @@ class FliggyProvider:
                 warnings.append("飞猪国际航班明细已达到本轮请求上限，剩余日期未查询")
                 break
             try:
-                result = self._international_day(route, day)
+                result = search_day(route, day)
                 succeeded += 1
                 quotes.extend(result.quotes)
                 warnings.extend(result.warnings)
@@ -694,9 +746,9 @@ class FliggyProvider:
                 continue
             if item.get("currency", "CNY") != "CNY":
                 raise ProviderError("飞猪国际航班明细币种与 CNY 不一致")
-            fare = _amount(item.get("adultPrice"), "国际成人票价 adultPrice")
-            tax = _amount(item.get("adultTax"), "国际成人税费 adultTax")
-            total = _amount(item.get("totalAdultPrice"), "国际成人含税价 totalAdultPrice")
+            fare = _listing_amount(item.get("adultPrice"), "国际成人票价 adultPrice")
+            tax = _listing_amount(item.get("adultTax"), "国际成人税费 adultTax")
+            total = _listing_amount(item.get("totalAdultPrice"), "国际成人含税价 totalAdultPrice")
             if total != fare + tax:
                 raise ProviderError("飞猪国际成人含税总价与票价加税费不一致")
             if not fare or not total:

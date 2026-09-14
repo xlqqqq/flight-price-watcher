@@ -3,6 +3,9 @@
 set -euo pipefail
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="$(command -v python3)"
+if [[ -x "$project_dir/.venv/bin/python" ]]; then
+    python_bin="$project_dir/.venv/bin/python"
+fi
 # The dashboard uses its own saved choices, not the CLI route configuration.
 # Check its imports without reading .env or rejecting unrelated CLI budgets.
 "$python_bin" - "$project_dir" <<'PY'
@@ -19,6 +22,13 @@ mkdir -p -- "$unit_dir"
 # systemd expands % specifiers even inside quoted paths; escape them.
 safe_project="${project_dir//%/%%}"
 safe_python="${python_bin//%/%%}"
+# nvm-managed Node is often absent from systemd's PATH. Pass its absolute
+# executable to the official API adapter without replacing the service PATH.
+flyai_node_environment=""
+if node_bin="$(command -v node)"; then
+    safe_node="${node_bin//%/%%}"
+    flyai_node_environment="Environment=\"FLIGHTWATCH_FLYAI_NODE=$safe_node\""
+fi
 cat > "$unit_dir/flight-price-watcher.service" <<EOF
 [Unit]
 Description=Local token-free flight price dashboard
@@ -29,6 +39,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$safe_project
 ExecStart="$safe_python" "$safe_project/watch.py" --web --no-browser
+$flyai_node_environment
 Restart=always
 RestartSec=5
 UMask=0077

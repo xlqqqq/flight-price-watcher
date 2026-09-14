@@ -109,7 +109,7 @@ python watch.py --web
 | [携程](https://m.ctrip.com/html5/flight/) | 城市日历与指定机场公开航班列表 | 国际机场核实成人含税价和具体航班购买链接；国内机场票面价仅作参考 |
 | [同程](https://www.ly.com/iflight/) | 国内公开航班页面；国际匿名低价日历一次返回未来约 91 天 | 国内为票价加该航班返回的机建与燃油；国际只取所选日期的官网 `TP` 含税总价，日历未回显航线的限制会随报价说明 |
 | [去哪儿](https://flight.qunar.com/site/) | 国内/国际公开低价日历 | 国际日历标注含税，参与总价比较；国内日历未含税，仅展示，不触发总价阈值 |
-| [飞猪](https://www.fliggy.com/) | 国内逐日航班搜索；国际匿名月度及七日最低价日历 | 国内普通成人经济舱价格加实际税费；国际逐条核对航线、日期和官网链接后使用 `price + tax`；优先每个自然月一次，月历明确拒绝时自动改用七日窗口 |
+| [飞猪](https://www.fliggy.com/) | 国内航班、国际城市日历与机场明细；可选官方 FlyAI API 备用查询 | 官网明确税费的价格参与比价；FlyAI 已返回实际机场航班和购票链接，但目前税费口径未确认，只作参考 |
 | [Trip.com](https://www.trip.com/flights/) | 官网匿名逐日航班搜索 | 核对 1 成人、经济舱、单程、CNY、航线、日期及票价/税费/优惠等式；排除会员、学生、新客、特定支付方式等资格价后，以普通成人含税总价参与比较 |
 | [Skyscanner](https://www.skyscanner.com.sg/transport/flights/) | 官网匿名精确日期搜索，等待增量结果完整结束 | 核对路线、日期、1 成人经济舱单程、CNY、供应商价格及官方 deeplink；通过后按官网含税费说明参与比较 |
 | [Google Flights](https://www.google.com/travel/flights) | 公开搜索页逐日查询 | 核实1成人、经济舱、单程、CNY及含税说明后参与总价比较；缺少口径或城市不匹配即拒绝 |
@@ -120,7 +120,9 @@ python watch.py --web
 | [春秋航空](https://flights.ch.com/) | 官网航线页校验后逐日查询含税最低价日历 | 只取精确日期及 `IsShowTaxprice=true` 返回值参与比较；日历不提供航班号与经停数，跳转后核实 |
 | [AirAsia](https://www.airasia.com/flights/) | 官网匿名精确日期动作，筛选 AirAsia 自营直飞 | 保留 MYR 原价并折算人民币；响应未说明税费口径，只在平台卡片展示，不参与最低总价和阈值 |
 
-各平台分别调用自己的公开网页服务，不把携程报价复制成其他平台报价，也不把购票链接当成已查询成功。同程和飞猪国际城市查询使用低价日历，指定机场查询使用各自官方详细航班列表；列表触发访问验证时会报告失败，不使用日历报价替代。KAYAK 和 momondo 当前只能完成真实官网探测，状态卡会如实报告动态会话限制。所有查价请求无需账号登录、用户 Cookie 或用户申请 API key。微信登录要求与查价独立。
+各平台分别调用自己的公开网页服务，不把携程报价复制成其他平台报价，也不把购票链接当成已查询成功。同程和飞猪国际城市查询使用低价日历，指定机场查询使用各自官方详细航班列表；列表触发访问验证时会报告原因，不使用日历报价替代。飞猪另支持普通匿名浏览器和官方 FlyAI API 备用入口；未配置 Key 可使用官方客户端的受限体验模式，正式免费 Key 可由本人向飞猪申请。KAYAK 和 momondo 当前只能完成真实官网探测，状态卡会如实报告动态会话限制。默认查价无需登录账号、提供账号 Cookie 或申请 API Key。微信登录要求与查价独立。
+
+**飞猪免费 API**：已验证官方个人免费申请入口，并接入官方客户端返回的实际机场参考报价。运行 `bash deploy/install-flight-extras.sh` 安装可选依赖；正式 Key 可填入本地 `.env` 的 `FLYAI_API_KEY`，不填则使用官方受限体验。同程和去哪儿目前只能确认商务合作申请入口，未确认个人免费生产查价权限。申请入口、额度边界、安装和税费限制见[官方 API 说明](docs/official-flight-apis.md)。
 
 费用与接口核验细节：[同程](TONGCHENG_SOURCE.md)、[去哪儿](QUNAR_SOURCE.md)、[飞猪](SOURCES_FLIGGY.md)、[Trip.com / Skyscanner](docs/trip-skyscanner-sources.md)、[Google Flights](docs/google-flights-source.md)、[Kiwi](KIWI_SOURCE.md)、[KAYAK / momondo](KAYAK_MOMONDO_SOURCES.md)、[春秋 / AirAsia](docs/spring-airasia-sources.md)、[海外来源总览](OVERSEAS_SOURCES.md)。
 
@@ -134,7 +136,7 @@ python watch.py --web
 
 Google Flights 支持实际机场请求和城市/机场混合请求。同程国内按 `originAirportCode` / `arriveAirportCode` 严格筛选。携程、去哪儿、同程国际、飞猪国际也已接入各自官方航班列表的机场查询路径，筛选实际首末机场后才参与比价，城市查询保留原来的日历路径。接口返回验证码、拒绝匿名请求、错航线或未完成结果时会明确报错，不会用城市日历价替代机场价。国内携程/去哪儿列表缺少充分税费证明，只作票面参考；不参加最低含税价或阈值提醒。
 
-2026-09-14 接入验收：携程 PVG → CJU 9/21–10/05 共 15 天全部取得机场匹配报价，约 14.16 秒，最低为 9/21 9C8573、含税参考 280 元。去哪儿本机回显了其他城市，已拒绝该响应；同程国际列表本机返回 HTTP 405，飞猪国际本机要求安全验证，后三个平台目前未成功取得可用机场报价。已接入查询路径不等于保证平台每次返回价格。详见 [携程](docs/ctrip-airport-source.md)、[去哪儿](docs/qunar-airport-source.md)、[同程国际](docs/tongcheng-airport-source.md)、[飞猪国际](docs/fliggy-airport-sources.md)。携程机场路径优先使用系统支持 HTTP/2 的 curl，无需用户提供 API token 或登录 Cookie。
+2026-09-14 接入验收：携程 PVG → CJU 9/21–10/05 共 15 天全部取得机场匹配报价，约 14.16 秒，最低为 9/21 9C8573、含税参考 280 元。去哪儿连官网自身请求也回显其他城市，已拒绝该响应；同程国际列表仍返回 HTTP 405。飞猪普通网页列表仍受安全验证影响，官方 FlyAI 体验查询已在约 3.27 秒返回 9/21 的 10 条机场匹配航班，最低返回票价 390 元，因税费口径未确认仅作参考。已接入查询路径不等于保证平台每次返回价格。详见 [携程](docs/ctrip-airport-source.md)、[去哪儿](docs/qunar-airport-source.md)、[同程国际](docs/tongcheng-airport-source.md)、[飞猪国际](docs/fliggy-airport-sources.md)、[官方 API](docs/official-flight-apis.md)。携程机场路径优先使用系统支持 HTTP/2 的 curl，无需用户提供 API token 或登录 Cookie。
 
 2026-09-14 实测 Google Flights 的 PVG → CJU，2026-09-21 至 2026-10-05 共 15 天均取得指定机场含税参考报价，约 15.83 秒完成；当次最低为 9 月 21 日 9C8573、380 元。该数值仅是当次验证结果，不是固定价格或后续可售保证。
 

@@ -1,0 +1,2 @@
+# Optional ordinary browser transport for Fliggy's official flight search.
+playwright==1.62.0

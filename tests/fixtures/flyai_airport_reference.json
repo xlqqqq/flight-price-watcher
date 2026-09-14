@@ -1,0 +1,123 @@
+{
+  "data": {
+    "itemList": [
+      {
+        "journeys": [
+          {
+            "journeyType": "直达",
+            "segments": [
+              {
+                "arrCityAbroad": true,
+                "arrCityCode": "CJU",
+                "arrCityName": "济州岛",
+                "arrDateTime": "2026-09-21 22:30:00",
+                "arrStationCode": "CJU",
+                "arrStationName": "济州国际机场",
+                "arrStationShortName": "济州",
+                "arrTerm": "",
+                "arrWeekAbbrName": "周一",
+                "depCityAbroad": null,
+                "depCityCode": "SHA",
+                "depCityName": "上海",
+                "depDateTime": "2026-09-21 20:05:00",
+                "depStationCode": "PVG",
+                "depStationName": "浦东国际机场",
+                "depStationShortName": "浦东",
+                "depTerm": "T2",
+                "depWeekAbbrName": "周一",
+                "duration": "85",
+                "marketingTransportName": "春秋",
+                "marketingTransportNo": "9C8573",
+                "miles": null,
+                "quantity": null,
+                "seatClassName": "经济舱",
+                "stopInfos": null,
+                "transportType": "飞机"
+              }
+            ],
+            "totalDuration": "85",
+            "transferDuration": ""
+          }
+        ],
+        "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F4APLjC",
+        "tags": null,
+        "ticketPrice": "390.00",
+        "totalDuration": "85"
+      },
+      {
+        "journeys": [
+          {
+            "journeyType": "中转",
+            "segments": [
+              {
+                "arrCityAbroad": true,
+                "arrCityCode": "CJJ",
+                "arrCityName": "清州",
+                "arrDateTime": "2026-09-21 11:05:00",
+                "arrStationCode": "CJJ",
+                "arrStationName": "清州国际机场",
+                "arrStationShortName": "清州",
+                "arrTerm": "I",
+                "arrWeekAbbrName": "周一",
+                "depCityAbroad": null,
+                "depCityCode": "SHA",
+                "depCityName": "上海",
+                "depDateTime": "2026-09-21 07:55:00",
+                "depStationCode": "PVG",
+                "depStationName": "浦东国际机场",
+                "depStationShortName": "浦东",
+                "depTerm": "T2",
+                "depWeekAbbrName": "周一",
+                "duration": "130",
+                "marketingTransportName": "春秋",
+                "marketingTransportNo": "9C7049",
+                "miles": null,
+                "quantity": null,
+                "seatClassName": "经济舱",
+                "stopInfos": null,
+                "transportType": "飞机"
+              },
+              {
+                "arrCityAbroad": true,
+                "arrCityCode": "CJU",
+                "arrCityName": "济州岛",
+                "arrDateTime": "2026-09-21 21:40:00",
+                "arrStationCode": "CJU",
+                "arrStationName": "济州国际机场",
+                "arrStationShortName": "济州",
+                "arrTerm": "",
+                "arrWeekAbbrName": "周一",
+                "depCityAbroad": null,
+                "depCityCode": "CJJ",
+                "depCityName": "清州",
+                "depDateTime": "2026-09-21 20:30:00",
+                "depStationCode": "CJJ",
+                "depStationName": "清州国际机场",
+                "depStationShortName": "清州",
+                "depTerm": "",
+                "depWeekAbbrName": "周一",
+                "duration": "70",
+                "marketingTransportName": "易斯达航空",
+                "marketingTransportNo": "ZE715",
+                "miles": null,
+                "quantity": null,
+                "seatClassName": "经济舱",
+                "stopInfos": null,
+                "transportType": "飞机"
+              }
+            ],
+            "totalDuration": "765",
+            "transferDuration": "565"
+          }
+        ],
+        "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F2VZD3W",
+        "tags": null,
+        "ticketPrice": "766.00",
+        "totalDuration": "765"
+      }
+    ]
+  },
+  "message": "success",
+  "status": 0,
+  "systemMessage": "*当前为体验模式，部分搜索结果可能受限，请前往 [飞猪AI开放平台](https://flyai.open.fliggy.com/) 获取正式API Key解锁完整服务。*"
+}

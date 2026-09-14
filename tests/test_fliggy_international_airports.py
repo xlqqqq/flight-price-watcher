@@ -26,7 +26,7 @@ def segment(dep="PVG", arr="CJU", dep_city="SHA", arr_city="CJU", number="9C8573
 
 def item(segments=None, fare=200):
     return {"flightInfo": [{"flightSegments": segments or [segment()], "mainAirlineName": "春秋航空"}],
-            "adultPrice": fare, "adultTax": 180, "totalAdultPrice": fare + 180,
+            "adultPrice": fare * 100, "adultTax": 18000, "totalAdultPrice": (fare + 180) * 100,
             "quantity": 9, "promotionShowInfos": [], "priceDesc": ""}
 
 
@@ -81,9 +81,19 @@ class FliggyInternationalAirportTests(unittest.TestCase):
                     self.parse([bad])
 
     def test_unknown_or_mismatched_tax_is_rejected(self):
-        for change in ({"adultTax": -1}, {"adultTax": None}, {"totalAdultPrice": 1}, {"currency": "USD"}):
+        for change in ({"adultTax": -1}, {"adultTax": None}, {"totalAdultPrice": 1},
+                       {"adultTax": "18000.5"}, {"currency": "USD"}):
             with self.subTest(change=change), self.assertRaises(ProviderError):
                 self.parse([dict(item(), **change)])
+
+    def test_live_template_integer_fen_are_converted_to_yuan(self):
+        # Amounts observed in the ordinary browser's initial real snapshot.
+        # Mark completion here only to isolate parser-unit conversion behavior;
+        # the browser tests separately prohibit publishing incomplete snapshots.
+        quote = self.parse([dict(item(), adultPrice=18600, adultTax=18000,
+                                 totalAdultPrice=36600, quantity=2)]).quotes[0]
+        self.assertEqual(quote.price, Decimal("366"))
+        self.assertIn("票价 186 + 税费 180", quote.price_note)
 
     def test_restricted_or_unavailable_offers_do_not_alert(self):
         for change in ({"priceDesc": "限两人"}, {"promotionShowInfos": [{"tag": "会员专享"}]},
