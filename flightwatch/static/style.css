@@ -62,7 +62,7 @@
 .source-status{font-size:9px;white-space:nowrap;color:#8596ad;background:#edf1f6;border-radius:4px;padding:2px 5px}
 .source-ok .source-status{color:#2a8a6c;background:#e9f5ef}
 .source-error .source-status{color:#b76357;background:#fff0e9}
-.source-unsupported .source-status{color:#a78642;background:#faf2de}
+.source-unsupported .source-status,.source-reference .source-status{color:#a78642;background:#faf2de}
 .source-detail{margin:7px 0 0;color:#8595a9;font-size:9px;font-variant-numeric:tabular-nums}
 .source-message{margin:6px 0 0;font-size:9px;color:#a0aabb;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap}
 .source-more{margin-top:6px}

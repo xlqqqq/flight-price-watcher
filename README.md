@@ -124,6 +124,8 @@ python watch.py --web
 
 **飞猪免费 API**：已验证官方个人免费申请入口，并接入官方客户端返回的实际机场参考报价。运行 `bash deploy/install-flight-extras.sh` 安装可选依赖；正式 Key 可填入本地 `.env` 的 `FLYAI_API_KEY`，不填则使用官方受限体验。同程和去哪儿目前只能确认商务合作申请入口，未确认个人免费生产查价权限。申请入口、额度边界、安装和税费限制见[官方 API 说明](docs/official-flight-apis.md)。
 
+**去哪儿免费城市参考**：国际机场明细失败时，程序会额外查询一次官方公开日历，在去哪儿卡片显示“仅城市参考”，日期明细默认折叠，可跳转对应日期查价。不需要安装额外依赖、登录或申请 Key。城市参考没有实际机场证明，不进入所选机场的最低价表，也不触发该机场行程的微信提醒；两端都选择城市“全部机场”时，原有国际日历含税参考价仍可参加比较和提醒。
+
 费用与接口核验细节：[同程](TONGCHENG_SOURCE.md)、[去哪儿](QUNAR_SOURCE.md)、[飞猪](SOURCES_FLIGGY.md)、[Trip.com / Skyscanner](docs/trip-skyscanner-sources.md)、[Google Flights](docs/google-flights-source.md)、[Kiwi](KIWI_SOURCE.md)、[KAYAK / momondo](KAYAK_MOMONDO_SOURCES.md)、[春秋 / AirAsia](docs/spring-airasia-sources.md)、[海外来源总览](OVERSEAS_SOURCES.md)。
 
 未含税、税费或成人口径未确认的价格会在平台状态中说明，**不参与最低总价及目标价提醒，也不会进入每天最低价表格**。不使用统一固定税费猜算，不把 0 当免费机票。瑞安外币按 [Frankfurter](https://frankfurter.dev/) 的有日期参考汇率折算；汇率无效、超出7天或请求失败则不换算，支付汇率以官网/发卡机构为准。微信/网页提醒同时带上最低价来源及各平台的参考总价或失败原因。

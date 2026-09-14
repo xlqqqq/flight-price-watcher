@@ -53,6 +53,23 @@ def main():
         expect(page.locator('.trip-result-heading')).to_contain_text('查询完成')
         expect(page.locator('[data-provider=skyscanner] .source-status')).to_have_text('查询失败')
         expect(page.locator('.fare-amount strong')).to_have_text('1,200')
+        # Airport-unverified city references stay in collapsed source details;
+        # a cheaper reference must never replace the comparable best fare.
+        result.sources.append(dict(id='qunar',name='去哪儿',status='reference',quote_count=0,
+            lowest_price=None,message='机场未确认',city_reference_quotes=[dict(
+                departure_date=day,price=655,currency='CNY',flight_number='9C8573',
+                url=f'https://flight.qunar.com/site/oneway_list_inter.htm?searchDepartureTime={day}&filterFlightCode=9C8573')]))
+        trip = _trip_snapshot(form,route,result=result,queried_at=stamp)
+        status.update(latest=_combined_snapshot(form,[trip],stamp))
+        card = page.locator('[data-provider=qunar]')
+        expect(card.locator('.source-status')).to_have_text('仅城市参考')
+        expect(card.locator('.source-reason')).to_contain_text('不参与比价或提醒')
+        expect(card.locator('.city-references')).not_to_have_attribute('open','')
+        expect(page.locator('.fare-amount strong')).to_have_text('1,200')
+        card.locator('.city-references summary').click()
+        expect(card.locator('.city-references')).to_contain_text('9C8573')
+        expect(card.locator('.city-references a')).to_have_attribute('href',
+            f'https://flight.qunar.com/site/oneway_list_inter.htm?searchDepartureTime={day}&filterFlightCode=9C8573')
         assert not errors, errors
         browser.close()
         print('PASS: partial fare visible, completed/total progress, pending status, final update keeps fare')

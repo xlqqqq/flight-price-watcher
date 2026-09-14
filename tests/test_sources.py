@@ -50,6 +50,34 @@ class MultiSourceTests(unittest.TestCase):
         self.assertIsNone(result.sources[1]["lowest_price"])
         self.assertTrue(result.sources[1]["message"])
 
+    def test_city_references_never_enter_airport_comparison_or_alert_quotes(self):
+        route = replace(self.route, origin="PEK", origin_scope="airport", origin_city_code="BJS",
+                        sources=("tongcheng",))
+        reference = self.quote("100", price_basis="unknown", url="https://flight.qunar.com/")
+        self.b.search.return_value = SearchResult([], ["机场未确认"], city_references=[reference])
+        result = self.provider.search(route, DAY)
+        self.assertEqual(result.quotes, [])
+        report = result.sources[0]
+        self.assertEqual(report["status"], "reference")
+        self.assertEqual(report["quote_count"], 0)
+        self.assertIsNone(report["lowest_price"])
+        self.assertEqual(report["city_reference_quotes"][0]["price"], 100)
+        self.assertEqual(report["search_url"], reference.url)
+
+    def test_city_reference_channel_rejects_wrong_identity_and_comparable_prices(self):
+        route = replace(self.route, origin="PEK", origin_scope="airport", origin_city_code="BJS",
+                        sources=("tongcheng",))
+        reference = self.quote("100", price_basis="unknown")
+        for invalid in (replace(reference, origin="CAN"), replace(reference, currency="USD"),
+                        replace(reference, departure_date=date(2026, 10, 2)),
+                        replace(reference, return_date=DAY), replace(reference, price_basis="total"),
+                        replace(reference, origin_airport="PEK")):
+            self.b.search.return_value = SearchResult([], [], city_references=[invalid])
+            with self.subTest(invalid=invalid):
+                result = self.provider.search(route, DAY)
+                self.assertEqual(result.quotes, [])
+                self.assertNotIn("city_reference_quotes", result.sources[0])
+
     def test_unexpected_parse_bug_is_isolated_and_sanitized(self):
         self.b.search.side_effect = ValueError("private raw response")
         result = self.provider.search(self.route, DAY)

@@ -19,6 +19,7 @@ we never blindly select the first suggest result or substitute a nearby city.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from http.client import HTTPException
@@ -210,12 +211,43 @@ class QunarCalendarProvider:
         if international != (route.market == "international"):
             raise ProviderUnsupported("去哪儿识别的国内国际范围与所选航线不一致")
         if airport_scope:
-            return self._search_airports(route, sorted(wanted), origin, destination)
+            try:
+                return self._search_airports(route, sorted(wanted), origin, destination)
+            except ProviderError as exc:
+                if not international or (self.cancelled and self.cancelled()):
+                    raise
+                # One public calendar request covers every selected date. Keep
+                # its city scope explicit, outside the airport quote channel.
+                try:
+                    fallback = self._city_references(route, wanted, origin, destination)
+                except ProviderError as fallback_error:
+                    raise ProviderError(f"{exc}；城市参考查询也未取得结果：{fallback_error}") from None
+                if not fallback.city_references:
+                    raise ProviderError(f"{exc}；所选日期也暂无城市日历参考报价") from None
+                fallback.warnings.insert(0, str(exc))
+                return fallback
         payload = self._request(ENDPOINT, {
             "dep": origin["name"], "arr": destination["name"],
             "days": "", "priceType": 2 if international else 1,
         })
         return self._parse(payload, route, wanted, origin["name"], destination["name"])
+
+    def _city_references(self, route: Route, wanted: set[date], origin: dict,
+                         destination: dict) -> SearchResult:
+        city_route = replace(route, origin=route.city_code("origin"),
+                             destination=route.city_code("destination"),
+                             origin_scope="city", destination_scope="city")
+        payload = self._request(ENDPOINT, {
+            "dep": origin["name"], "arr": destination["name"], "days": "", "priceType": 2,
+        })
+        parsed = self._parse(payload, city_route, wanted, origin["name"], destination["name"])
+        note = ("去哪儿城市日历含税参考价，1 成人单程；未确认所选机场，"
+                "不参与本行程最低价或微信提醒；缓存与最终可售价可能不同")
+        references = [replace(q, price_basis="unknown", price_note=note,
+                              url=self._flight_url(city_route, q.departure_date, origin,
+                                                   destination, q.flight_number))
+                      for q in parsed.quotes]
+        return SearchResult([], [note, *parsed.warnings], city_references=references)
 
     @staticmethod
     def _flight_url(route: Route, departure: date, origin: dict, destination: dict,

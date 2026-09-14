@@ -132,3 +132,6 @@ class SearchResult:
     quotes: list[Quote]
     warnings: list[str]
     sources: list[dict] = field(default_factory=list)
+    # City-wide alternatives when an airport query cannot be verified. These
+    # never enter quotes, the price comparison, persistence or alert engine.
+    city_references: list[Quote] = field(default_factory=list)

@@ -90,7 +90,8 @@ def estimate_requests(name, route, days):
         if name == "ctrip":
             return len(days)
         if name == "qunar":
-            return 2 + (4 if route.market == "international" else 1) * len(days)
+            return (3 + 4 * len(days) if route.market == "international"
+                    else 2 + len(days))
         if name == "tongcheng" and route.market == "international":
             return 2 + 5 * len(days)
         if name == "fliggy" and route.market == "international":
@@ -231,13 +232,31 @@ class MultiSourceProvider:
                 comparable = [q for q in quotes if q.comparable]
                 report.update(status="ok" if quotes else "empty", quote_count=len(quotes),
                     lowest_price=float(min(q.price for q in comparable)) if comparable else None)
+                # A separate display-only channel: never relax actual-airport
+                # checks above or append these city alternatives to quotes.
+                city_references = [q for q in result.city_references
+                    if (route.origin_scope == "airport" or route.destination_scope == "airport")
+                    and q.origin == route.city_code("origin")
+                    and q.destination == route.city_code("destination")
+                    and q.currency == route.currency and q.departure_date in wanted
+                    and q.return_date == route.return_on(q.departure_date)
+                    and not q.comparable and not q.origin_airport and not q.destination_airport]
+                if city_references:
+                    report["city_reference_quotes"] = [dict(
+                        departure_date=q.departure_date.isoformat(), price=float(q.price),
+                        currency=q.currency, flight_number=q.flight_number, url=q.url,
+                        price_note=q.price_note) for q in city_references]
+                    if not quotes:
+                        report["status"] = "reference"
+                        report["search_url"] = min(city_references,
+                            key=lambda q: (q.price, q.departure_date)).url
                 if quotes:
                     cheapest = min(comparable or quotes, key=lambda q: (q.price, q.departure_date))
                     if cheapest.url:
                         report["search_url"] = cheapest.url
                 if quotes and not comparable:
                     warnings.append("未获得可核实总价；展示报价但不参与最低总价及阈值提醒")
-                if not quotes:
+                if not quotes and not city_references:
                     warnings.append("这些日期未查到有效报价，不代表没有航班")
                 report["message"] = "；".join(warnings) or "查询成功"
                 return quotes, warnings, report

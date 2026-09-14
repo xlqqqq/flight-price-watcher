@@ -1,0 +1,36 @@
+{
+  "bstatus": {
+    "code": 0
+  },
+  "data": {
+    "scity": "上海",
+    "ecity": "济州岛",
+    "flightType": 2,
+    "gflights": [
+      {
+        "date": "2026-10-04",
+        "code": "9C8573",
+        "backFlight": "",
+        "price": "955",
+        "backDate": "",
+        "directPriceDesc": "",
+        "disabled": false,
+        "goFlight": "",
+        "directPrice": "955",
+        "priceDesc": ""
+      },
+      {
+        "date": "2026-10-05",
+        "code": "9C8573",
+        "backFlight": "",
+        "price": "655",
+        "backDate": "",
+        "directPriceDesc": "",
+        "disabled": false,
+        "goFlight": "",
+        "directPrice": "655",
+        "priceDesc": ""
+      }
+    ]
+  }
+}

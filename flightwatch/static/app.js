@@ -904,7 +904,7 @@
         : "暂无可比的含税总价；平台返回状态及其他参考报价如下。");
     scope.classList.toggle("limited", count < 2);
     wrapper.append(scope);
-    const statuses = { ok: "已返回报价", empty: "暂无报价", error: "查询失败", unsupported: "暂不支持", pending: "查询中" };
+    const statuses = { ok: "已返回报价", reference: "仅城市参考", empty: "暂无报价", error: "查询失败", unsupported: "暂不支持", pending: "查询中" };
     const list = element("ul", "source-list");
     const fragment = document.createDocumentFragment();
     for (const source of sources) {
@@ -918,7 +918,7 @@
       const matches = comparable.filter((quote) => quote.provider === source.id);
       const sourceQuotes = quotes.filter((quote) => quote.provider === source.id);
       const quoteCount = Number.isInteger(source.quote_count) && source.quote_count >= 0 ? source.quote_count : sourceQuotes.length;
-      let detail = `${quoteCount} 条报价`;
+      let detail = status === "reference" ? "尚无机场匹配报价" : `${quoteCount} 条报价`;
       if (matches.length) detail += ` · 参考总价 ¥${priceFormat.format(Math.min(...matches.map((quote) => quote.price)))} 起`;
       else if (sourceQuotes.length) {
         const reference = sourceQuotes.reduce((lowest, quote) => quote.price < lowest.price ? quote : lowest);
@@ -931,6 +931,28 @@
       if (source.status === "pending") detail = "结果返回后自动更新";
       else if (Number.isFinite(source.elapsed_seconds)) detail += ` · 用时 ${source.elapsed_seconds} 秒`;
       card.append(top, element("p", "source-detail", detail));
+      const cityReferences = (Array.isArray(source.city_reference_quotes) ? source.city_reference_quotes : [])
+        .filter((quote) => Number.isFinite(quote.price) && quote.price > 0 && quote.currency === "CNY"
+          && /^\d{4}-\d{2}-\d{2}$/.test(quote.departure_date));
+      if (cityReferences.length) {
+        const lowest = Math.min(...cityReferences.map((quote) => quote.price));
+        card.append(element("p", "source-reason", `城市参考 ¥${priceFormat.format(lowest)} 起 · 机场未确认，不参与比价或提醒`));
+        const alternatives = element("details", "source-more city-references");
+        alternatives.append(element("summary", "source-more-summary", `查看 ${cityReferences.length} 天城市参考价`));
+        for (const quote of cityReferences) {
+          const row = element("p", "source-message", `${quote.departure_date} · ¥${priceFormat.format(quote.price)} · ${quote.flight_number || "航班待确认"} `);
+          const url = safeBookingUrl(quote.url);
+          if (url) {
+            const link = element("a", "source-search-link", "去核价 ↗");
+            link.href = url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            row.append(link);
+          }
+          alternatives.append(row);
+        }
+        card.append(alternatives);
+      }
       if (status === "unsupported" || status === "error") {
         const reason = element("p", "source-reason", String(source.message || "").split("；")[0]);
         reason.title = source.message || "";

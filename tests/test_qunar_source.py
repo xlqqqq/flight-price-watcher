@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 import io
 import json
+from pathlib import Path
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -298,7 +299,52 @@ class QunarAirportFlightTests(unittest.TestCase):
         self.provider._request = Mock(return_value=self.response(complete=False, dep="北京", arr="名古屋"))
         with self.assertRaisesRegex(ProviderError, "回显了其他城市"):
             self.provider.search(route, TODAY)
+        self.assertEqual(self.provider._request.call_count, 2)
+        self.assertEqual(self.provider._request.call_args.args[0], ENDPOINT)
+
+    def test_free_city_fallback_is_separate_from_airport_quotes_and_alerts(self):
+        payload = json.loads((Path(__file__).parent / "fixtures/qunar_city_reference.json").read_text())
+        route = replace(self.route, dates=(date(2026, 10, 4), date(2026, 10, 5)))
+        self.provider._request = Mock(side_effect=[
+            self.response(complete=False, dep="北京", arr="名古屋"), payload])
+        result = self.provider.search(route, TODAY)
+        self.assertEqual(result.quotes, [])
+        self.assertEqual([q.price for q in result.city_references], [955, 655])
+        self.assertTrue(all(q.origin == "SHA" and q.destination == "CJU"
+                            and not q.origin_airport and not q.destination_airport
+                            and not q.comparable for q in result.city_references))
+        self.assertIn("回显了其他城市", result.warnings[0])
+        self.assertIn("未确认所选机场", result.city_references[0].price_note)
+        params = parse_qs(urlparse(result.city_references[-1].url).query)
+        self.assertEqual(params["searchDepartureTime"], ["2026-10-05"])
+        self.assertEqual(params["filterFlightCode"], ["9C8573"])
+        self.assertEqual(self.provider._request.call_count, 2)
+
+    def test_cancelled_airport_failure_does_not_query_city_fallback(self):
+        event = threading.Event()
+        self.provider.cancelled = event.is_set
+        def fail(*args):
+            event.set()
+            raise ProviderError("已停止")
+        self.provider._request = Mock(side_effect=fail)
+        with self.assertRaisesRegex(ProviderError, "已停止"):
+            self.provider.search(self.route, TODAY)
         self.provider._request.assert_called_once()
+
+    def test_successful_airport_search_does_not_add_calendar_requests(self):
+        self.provider._request = Mock(return_value=self.response(self.flight()))
+        result = self.provider.search(self.route, TODAY)
+        self.assertEqual(len(result.quotes), 1)
+        self.assertEqual(result.city_references, [])
+        self.provider._request.assert_called_once()
+
+    def test_city_fallback_rejects_wrong_route_and_unselected_dates(self):
+        for payload in (calendar(row(), destination="东京", market=2),
+                        calendar(row(), destination="济州岛", market=2)):
+            self.provider._resolve_city = Mock(side_effect=[self.origin, self.destination])
+            self.provider._request = Mock(side_effect=[ProviderError("机场列表不可用"), payload])
+            with self.subTest(payload=payload), self.assertRaisesRegex(ProviderError, "机场列表不可用"):
+                self.provider.search(replace(self.route, dates=(date(2026, 10, 5),)), TODAY)
 
     def test_incomplete_or_different_query_never_publishes_partial_minimum(self):
         self.provider._request = Mock(return_value=self.response(self.flight(), complete=False))

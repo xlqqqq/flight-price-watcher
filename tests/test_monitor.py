@@ -85,6 +85,13 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.notifier.send.assert_not_called()
         self.assertIsNone(self.state.last_alert(self.route.state_key(), "threshold"))
 
+    def test_city_reference_below_threshold_cannot_notify(self):
+        self.source.search.return_value = SearchResult([], [], city_references=[
+            quote("1", price_basis="unknown", origin_airport="", destination_airport="")])
+        self.run_cycle()
+        self.notifier.send.assert_not_called()
+        self.assertIsNone(self.state.last_alert(self.route.state_key(), "threshold"))
+
     def test_airport_monitor_never_alerts_for_cheaper_other_airport(self):
         route = monitored_route(origin="PEK", destination="PVG", origin_scope="airport",
             destination_scope="airport", origin_city_code="BJS", destination_city_code="SHA")
