@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from .config import Settings, get_timezone, integer, money
 from . import __version__
-from .models import ConfigError, ProviderError, Route
+from .models import ConfigError, ProviderError, Route, SearchResult
 from .monitor import run_cycle
 from .notifier import NotificationError
 from .sources import DEFAULT_SOURCES, PROVIDERS, MultiSourceProvider, normalize_sources
@@ -224,7 +224,7 @@ def settings_for(form: dict, data_dir: Path) -> Settings:
             destination_label=trip.get("destination_label", ""),
         ))
     return Settings(tuple(routes), TZ, form["interval_minutes"], 24, 24, Decimal("1"),
-                    30, 1.0, 160, data_dir / "dashboard.sqlite3")
+                    20, 1.0, 160, data_dir / "dashboard.sqlite3")
 
 
 def _quote_payload(quote, route_id: str) -> dict:
@@ -255,10 +255,10 @@ def _quote_payload(quote, route_id: str) -> dict:
 
 
 def _trip_snapshot(trip: dict, route: Route, *, result=None, error: str | None = None,
-                   queried_at: str) -> dict:
+                   queried_at: str, in_progress: bool = False) -> dict:
     quotes = [] if result is None else [_quote_payload(quote, route.id) for quote in result.quotes]
     quotes.sort(key=lambda quote: (quote["departure_date"], quote["price"], quote["provider"]))
-    if error is None and not any(quote["comparable"] for quote in quotes):
+    if not in_progress and error is None and not any(quote["comparable"] for quote in quotes):
         error = "所选平台暂未返回可比较的参考总价；请查看该行程的平台状态。"
     return dict(
         route_id=route.id,
@@ -280,6 +280,7 @@ def _trip_snapshot(trip: dict, route: Route, *, result=None, error: str | None =
         warnings=[] if result is None else list(result.warnings),
         sources=[] if result is None else list(result.sources),
         error=error,
+        in_progress=in_progress,
     )
 
 
@@ -310,6 +311,7 @@ def _combined_snapshot(form: dict, trips: list[dict], queried_at: str) -> dict:
         sources=[],
         error=error,
         partial_error=partial_error,
+        in_progress=any(trip.get("in_progress") for trip in trips),
     )
 
 
@@ -500,6 +502,26 @@ class Dashboard:
             settings = settings_for(form, self.data_dir)
             trip_forms = _trips_in(form)
             today = datetime.now(TZ).date()
+            queried_at = now_iso()
+            items = list(zip(trip_forms, settings.routes))
+            progress = {}
+            for trip, route in items:
+                pending = SearchResult([], [], [dict(id=name, name=name, status="pending", quote_count=0,
+                    lowest_price=None, message="等待查询", search_url="") for name in route.sources])
+                progress[route.id] = _trip_snapshot(trip, route, result=pending,
+                    queried_at=queried_at, in_progress=True)
+            with self.lock:
+                self.latest = _combined_snapshot(form, list(progress.values()), queried_at)
+
+            def publish(trip, route, result=None, error=None, in_progress=True):
+                current = _trip_snapshot(trip, route, result=result, error=error,
+                    queried_at=queried_at, in_progress=in_progress)
+                with self.lock:
+                    if event is None or not event.is_set():
+                        progress[route.id] = current
+                        self.latest = _combined_snapshot(form,
+                            [progress[r.id] for r in settings.routes], queried_at)
+                return current
 
             def query_trip(item):
                 trip, route = item
@@ -512,16 +534,15 @@ class Dashboard:
                         request_delay=settings.request_delay_seconds,
                         max_requests=settings.max_requests_per_cycle,
                         cancelled=event.is_set if event is not None else None,
+                        on_progress=lambda result: publish(trip, route, result=result),
                     ).search(route, today)
-                    return result, _trip_snapshot(trip, route, result=result, queried_at=queried_at)
+                    return result, publish(trip, route, result=result, in_progress=False)
                 except (ProviderError, ConfigError) as exc:
                     error = ProviderError(str(exc))
                 except Exception as exc:
                     error = ProviderError(f"该行程查询未完成（{type(exc).__name__}），请稍后重试")
-                return error, _trip_snapshot(trip, route, error=str(error), queried_at=queried_at)
+                return error, publish(trip, route, error=str(error), in_progress=False)
 
-            queried_at = now_iso()
-            items = list(zip(trip_forms, settings.routes))
             if len(items) == 1:
                 outcomes = [query_trip(items[0])]
             else:

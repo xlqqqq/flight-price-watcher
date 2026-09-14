@@ -863,7 +863,12 @@
     dot.className = `state-dot${busy ? " busy" : monitor.last_error ? " error" : monitor.running ? " running" : ""}`;
     $("monitor-heading").textContent = busy ? "正在查询航班参考价" : monitor.running ? "价格监控中" : "监控未运行";
     let detail = "选好行程后，可以立即查询或开始监控。";
-    if (busy) detail = "正在获取所选日期的价格，请稍等。";
+    if (busy) {
+      const sources = resultTrips(status.latest).flatMap((trip) => trip.sources || []);
+      const completed = sources.filter((source) => source.status !== "pending").length;
+      detail = sources.length ? `已完成 ${completed}/${sources.length} 项平台查询，报价陆续更新；完成比价后判断提醒。`
+        : "正在获取所选日期的价格，报价会陆续显示。";
+    }
     else if (monitor.running && monitor.settings) {
       const settings = monitor.settings;
       if (Array.isArray(settings.trips)) {
@@ -898,7 +903,7 @@
         : "暂无可比的含税总价；平台返回状态及其他参考报价如下。");
     scope.classList.toggle("limited", count < 2);
     wrapper.append(scope);
-    const statuses = { ok: "已返回报价", empty: "暂无报价", error: "查询失败", unsupported: "暂不支持" };
+    const statuses = { ok: "已返回报价", empty: "暂无报价", error: "查询失败", unsupported: "暂不支持", pending: "查询中" };
     const list = element("ul", "source-list");
     const fragment = document.createDocumentFragment();
     for (const source of sources) {
@@ -921,6 +926,8 @@
           detail += ` · ${reference.original_currency} ${priceFormat.format(reference.original_price)}`;
         }
       } else if (quoteCount) detail += " · 无可比总价";
+      if (source.status === "pending") detail = "结果返回后自动更新";
+      else if (Number.isFinite(source.elapsed_seconds)) detail += ` · 用时 ${source.elapsed_seconds} 秒`;
       card.append(top, element("p", "source-detail", detail));
       if (source.message) {
         const more = element("details", "source-more");
@@ -1003,7 +1010,9 @@
       element("h3", "trip-result-title", trip.name || `${cityName(trip.origin)} → ${cityName(trip.destination)}`),
       element("p", "trip-result-range", `${friendlyDate(trip.start_date)} 至 ${friendlyDate(trip.end_date)} · ${trip.market === "domestic" ? "国内" : "国际 / 港澳台"}`),
     );
-    heading.append(title, element("span", `small-tag${trip.error ? " error" : " ready"}`, trip.error ? "部分或暂无结果" : "查询完成"));
+    heading.append(title, element("span", `small-tag${trip.in_progress ? " busy" : trip.error ? " error" : " ready"}`,
+      trip.in_progress ? "查询中 · 报价更新中" : trip.error ? "部分或暂无结果" : "查询完成"));
+    if (trip.in_progress) card.append(element("p", "notice", "正在比较其余平台，当前价格为已返回结果中的最低价，完整结果仍可能变化。"));
     card.append(heading, sourceSummary(trip, quotes, comparable));
 
     const startDate = trip.start_date || trip.settings?.start_date;
@@ -1041,11 +1050,13 @@
       fare.append(fareBody, meta);
       card.append(fare);
     } else {
-      card.append(element("div", "notice no-comparable", "本行程暂无可比的含税参考总价。未含税或口径未确认的报价不会被选作最低价，请查看平台状态。"));
+      card.append(element("div", "notice no-comparable", trip.in_progress ? "正在等待可比报价，查询结果将陆续显示。"
+        : "本行程暂无可比的含税参考总价。未含税或口径未确认的报价不会被选作最低价，请查看平台状态。"));
     }
     card.append(element("p", "price-note", rangeNote + (best
       ? "每个出发日期只展示所选平台中可比的最低含税参考总价；其他平台结果见上方状态，成交价以跳转后的预订页面为准。"
-      : "本次只有未含税或口径未确认的参考报价，不能据此判断哪个平台的含税总价最低。")));
+      : trip.in_progress ? "查询完成后按各行程设置判断提醒条件。"
+        : "本次只有未含税或口径未确认的参考报价，不能据此判断哪个平台的含税总价最低。")));
 
     if (dailyLowest.length) {
       const section = element("div", "daily-lowest-section");
@@ -1214,7 +1225,7 @@
       $("form-fields").disabled = false;
       applySettings(bootstrap.defaults);
       await poll();
-      setInterval(poll, 2500);
+      setInterval(poll, 1000);
     } catch (error) {
       $("connection-error").textContent = `${error.message} 请确认本地程序已启动，然后刷新页面。`;
       $("connection-error").hidden = false;

@@ -1,10 +1,11 @@
 """Query independent public providers and retain failures alongside prices."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import date
 import threading
+import time
 import urllib.parse
 
 from .models import ConfigError, ProviderError, ProviderUnsupported, Route, SearchResult
@@ -179,11 +180,12 @@ def make_public_provider(name, timeout=30, request_delay=1.0, max_requests=60, *
 
 
 class MultiSourceProvider:
-    def __init__(self, timeout=30, request_delay=1.0, max_requests=60, *, providers=None, cancelled=None):
+    def __init__(self, timeout=30, request_delay=1.0, max_requests=60, *, providers=None, cancelled=None, on_progress=None):
         self.providers = providers if providers is not None else {}
         self._use_factory = providers is None
         self._options = (timeout, request_delay, max_requests)
         self.cancelled = cancelled
+        self.on_progress = on_progress
 
     def search(self, route: Route, today: date) -> SearchResult:
         names = normalize_sources((route.sources or DEFAULT_SOURCES) if route.provider == "multi"
@@ -237,19 +239,41 @@ class MultiSourceProvider:
                 report["message"] = f"查询未完成（{type(exc).__name__}），请稍后重试"
             return [], [report["message"]], report
 
-        quotes, warnings, reports = [], [], []
+        outcomes = {}
+
+        def snapshot():
+            quotes, warnings, reports = [], [], []
+            for name in names:
+                if name not in outcomes:
+                    reports.append(dict(id=name, name=NAMES[name], status="pending", quote_count=0,
+                                        lowest_price=None, message="正在查询", search_url=""))
+                    continue
+                items, notes, report = outcomes[name]
+                quotes.extend(items)
+                warnings.extend(f"{NAMES[name]}：{note}" for note in notes)
+                reports.append(dict(report))
+            quotes.sort(key=lambda q: (q.departure_date, q.price, q.provider))
+            return SearchResult(quotes, warnings, reports)
+
+        def timed_query(name):
+            started = time.monotonic()
+            items, notes, report = query(name)
+            report["elapsed_seconds"] = round(time.monotonic() - started, 2)
+            return items, notes, report
+
+        if self.on_progress:
+            self.on_progress(snapshot())
         # The list is bounded by DEFAULT_SOURCES. Each independent platform
         # manages its own request pacing, so queueing selected platforms here
         # only adds avoidable wall-clock time.
         with ThreadPoolExecutor(max_workers=len(names), thread_name_prefix="fare-source") as pool:
-            # map preserves selected provider order despite parallel requests.
             try:
-                for name, (items, notes, report) in zip(names, pool.map(query, names)):
-                    quotes.extend(items)
-                    warnings.extend(f"{NAMES[name]}：{note}" for note in notes)
-                    reports.append(report)
+                futures = {pool.submit(timed_query, name): name for name in names}
+                for future in as_completed(futures):
+                    outcomes[futures[future]] = future.result()
+                    if self.on_progress:
+                        self.on_progress(snapshot())
             except BaseException:
                 interrupted.set()
                 raise
-        quotes.sort(key=lambda q: (q.departure_date, q.price, q.provider))
-        return SearchResult(quotes, warnings, reports)
+        return snapshot()

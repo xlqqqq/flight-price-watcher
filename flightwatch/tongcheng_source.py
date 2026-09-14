@@ -450,6 +450,9 @@ class TongchengProvider:
                 warnings.extend(result.warnings)
             except ProviderError as exc:
                 failures.append(f"{day.isoformat()}：{exc}")
+                if not succeeded:
+                    failures.append("首日查询未成功，暂停该平台剩余日期，避免重复等待；下轮可重试")
+                    break
         if not succeeded:
             raise ProviderError("；".join(failures) or "同程未能取得有效网页数据")
         warnings.extend(failures)

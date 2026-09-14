@@ -119,3 +119,40 @@ class MultiTripTests(unittest.TestCase):
         self.assertEqual(saved["notify"], "serverchan")
         self.assertEqual(len(self.app.bootstrap()["defaults"]["trips"]), 2)
         self.app.stop()
+
+    def test_completed_trip_is_visible_while_other_trip_waits_without_early_alert(self):
+        from flightwatch.webapp import _combined_snapshot
+        from unittest.mock import Mock
+        published, release = threading.Event(), threading.Event()
+        def observe(*args):
+            snapshot = _combined_snapshot(*args)
+            trips = snapshot["trips"]
+            if (trips[0]["in_progress"] and not trips[1]["in_progress"]
+                    and trips[1]["quotes"]):
+                published.set()
+            return snapshot
+        def fares(route, today):
+            if route.destination == "TYO":
+                release.wait(3)
+            return self.fares(route, today)
+        provider = Mock()
+        provider.search.side_effect = fares
+        with patch("flightwatch.sources.make_public_provider", return_value=provider), \
+                patch("flightwatch.webapp._combined_snapshot", side_effect=observe), \
+                patch("flightwatch.serverchan_settings.make_notifier") as notifier:
+            notifier.return_value.send.return_value = "accepted:test"
+            worker = threading.Thread(target=self.query)
+            worker.start()
+            try:
+                self.assertTrue(published.wait(2), "fast trip was hidden behind slow trip")
+                current = self.app.status()["latest"]
+                self.assertTrue(current["in_progress"])
+                self.assertIsNone(current["error"])
+                self.assertEqual(current["trips"][1]["quotes"][0]["price"], 450)
+                notifier.return_value.send.assert_not_called()
+            finally:
+                release.set()
+                worker.join(4)
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(self.app.latest["in_progress"])
+            notifier.return_value.send.assert_called_once()

@@ -154,6 +154,27 @@ class MultiSourceTests(unittest.TestCase):
         result = self.provider.search(self.route, DAY)
         self.assertEqual([s["status"] for s in result.sources], ["ok", "ok"])
 
+    def test_fast_source_progress_does_not_wait_for_first_slow_source(self):
+        release = threading.Event()
+        partial = threading.Event()
+        snapshots = []
+        def slow(*args):
+            self.assertTrue(release.wait(3))
+            return SearchResult([self.quote("500")], [])
+        def progress(result):
+            snapshots.append(result)
+            if result.sources[0]["status"] == "pending" and result.sources[1]["status"] == "ok":
+                partial.set()
+                release.set()
+        self.a.search.side_effect = slow
+        self.provider.on_progress = progress
+        result = self.provider.search(self.route, DAY)
+        self.assertTrue(partial.is_set())
+        self.assertEqual([s["id"] for s in result.sources], ["ctrip", "tongcheng"])
+        self.assertTrue(all(s["status"] == "pending" for s in snapshots[0].sources))
+        self.assertEqual([s["status"] for s in result.sources], ["ok", "ok"])
+        self.assertTrue(all(s["elapsed_seconds"] >= 0 for s in result.sources))
+
     def test_all_selected_platforms_start_without_four_source_queue(self):
         names = DEFAULT_SOURCES
         barrier = threading.Barrier(len(names), timeout=3)

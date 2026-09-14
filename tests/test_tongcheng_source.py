@@ -347,6 +347,14 @@ class TongchengTransportTests(unittest.TestCase):
             with self.assertRaises(ProviderError):
                 provider.search(ROUTE, DAY)
 
+    def test_failed_initial_date_does_not_repeat_slow_requests(self):
+        provider = TongchengProvider(request_delay=0)
+        route = replace(ROUTE, dates=(DAY, date(2026, 9, 23), date(2026, 9, 24)))
+        with patch.object(provider, "_request", side_effect=ProviderError("网络超时")) as request:
+            with self.assertRaisesRegex(ProviderError, "暂停.*剩余日期"):
+                provider.search(route, DAY)
+        request.assert_called_once()
+
     def test_stop_does_not_query_remaining_dates(self):
         stopped = threading.Event()
         provider = TongchengProvider(request_delay=0, cancelled=stopped.is_set)

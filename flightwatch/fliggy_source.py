@@ -278,6 +278,9 @@ class FliggyProvider:
                 warnings.extend(result.warnings)
             except ProviderError as exc:
                 failures.append(f"{day}：{exc}")
+                if not succeeded:
+                    failures.append("首日查询未成功，暂停该平台剩余日期，避免重复等待；下轮可重试")
+                    break
         if not succeeded:
             raise ProviderError("；".join(failures) or "飞猪未取得有效票价数据")
         return SearchResult(quotes, list(dict.fromkeys(warnings + failures)))
