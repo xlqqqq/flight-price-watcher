@@ -197,10 +197,6 @@ class GoogleFlightsProvider:
 
     def search(self, route: Route, today: date) -> SearchResult:
         self._check_cancelled()
-        if route.origin_scope == "airport" or route.destination_scope == "airport":
-            raise ProviderUnsupported(
-                "Google Flights 当前解析只核实城市实体，无法保证指定机场；本次未发起网络查询"
-            )
         if route.currency != "CNY":
             raise ProviderUnsupported("Google Flights 当前适配仅核实 CNY 人民币报价")
         if route.stay_nights is not None or route.nonstop or route.travel_class != 1:
@@ -208,7 +204,13 @@ class GoogleFlightsProvider:
         if route.market not in {"domestic", "international"}:
             raise ProviderUnsupported("Google Flights 需要明确国内或国际航线")
         names = []
-        for code in (route.origin, route.destination):
+        for side in ("origin", "destination"):
+            code = getattr(route, side)
+            if getattr(route, f"{side}_scope") == "airport":
+                if not isinstance(code, str) or not _CODE.fullmatch(code):
+                    raise ProviderUnsupported("Google Flights 具体机场必须使用三字母机场代码")
+                names.append(f"{code} airport")
+                continue
             known = (cached_city(code) or resolve_city(code)) if isinstance(code, str) and _CODE.fullmatch(code) else None
             if not known or not isinstance(known.get("name"), str) or not known["name"].strip():
                 raise ProviderUnsupported("Google Flights 需要已搜索选定的城市名称，无法确认未知代码对应的城市")
@@ -301,14 +303,24 @@ class GoogleFlightsProvider:
             raise ProviderError("Google Flights 回显日期、单程、舱位或乘客数与查询不符")
         origin = _get(query, 2, 0)
         destination = _get(query, 2, 1)
-        origin_id = _city_entity(origin, route.origin)
-        destination_id = _city_entity(destination, route.destination)
+        def place_entity(value, side):
+            code = getattr(route, side)
+            if getattr(route, f"{side}_scope") == "city":
+                return _city_entity(value, code), 4
+            if (_get(value, 0) != [code, 0] or _get(value, 5) != 0
+                    or not isinstance(_get(value, 2, 0), str)
+                    or not _get(value, 2, 0).startswith(("/m/", "/g/"))):
+                raise ProviderError(f"Google Flights 未准确回显所选机场 {code}")
+            return code, 0
+
+        origin_id, origin_kind = place_entity(origin, "origin")
+        destination_id, destination_kind = place_entity(destination, "destination")
         if (
-            _get(legs, 0, 0) != [[[origin_id, 4]]]
-            or _get(legs, 0, 1) != [[[destination_id, 4]]]
+            _get(legs, 0, 0) != [[[origin_id, origin_kind]]]
+            or _get(legs, 0, 1) != [[[destination_id, destination_kind]]]
             or _get(payload, 1, 0, 0) is None or _get(payload, 1, 0, 1) is None
-            or _get(payload, 1, 0, 0, 0, 0) != [origin_id, 4]
-            or _get(payload, 1, 0, 1, 0, 0) != [destination_id, 4]
+            or _get(payload, 1, 0, 0, 0, 0) != [origin_id, origin_kind]
+            or _get(payload, 1, 0, 1, 0, 0) != [destination_id, destination_kind]
         ):
             raise ProviderError("Google Flights 查询与报价回显城市不一致")
         if (route.market == "domestic") != (_get(origin, 4) == "CN" and _get(destination, 4) == "CN"):
@@ -344,8 +356,10 @@ class GoogleFlightsProvider:
             if (
                 not isinstance(segments, list) or not segments
                 or _day(_get(flight, 4)) != departure
-                or airport_cities.get(_get(flight, 3)) != origin_id
-                or airport_cities.get(_get(flight, 6)) != destination_id
+                or (airport_cities.get(_get(flight, 3)) != origin_id if origin_kind == 4
+                    else _get(flight, 3) != origin_id)
+                or (airport_cities.get(_get(flight, 6)) != destination_id if destination_kind == 4
+                    else _get(flight, 6) != destination_id)
                 or _get(segments, 0, 3) != _get(flight, 3)
                 or _get(segments, len(segments) - 1, 6) != _get(flight, 6)
                 or _day(_get(segments, 0, 20)) != departure

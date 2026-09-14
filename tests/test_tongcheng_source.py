@@ -104,6 +104,30 @@ class NuxtParserTests(unittest.TestCase):
 
 
 class TongchengPriceTests(unittest.TestCase):
+    def test_domestic_specific_airports_filter_before_selecting_lowest(self):
+        route = replace(ROUTE, origin="PEK", destination="PVG", origin_scope="airport",
+            destination_scope="airport", origin_city_code="BJS", destination_city_code="SHA")
+        rows = [flight(originAirportCode="PKX", arriveAirportCode="PVG", lcp=100),
+                flight(originAirportCode="PEK", arriveAirportCode="SHA", lcp=200),
+                flight(originAirportCode="PEK", arriveAirportCode="PVG", lcp=450)]
+        provider = TongchengProvider(request_delay=0)
+        with patch.object(provider, "_request", return_value=page(state(rows))) as request:
+            result = provider.search(route, DAY)
+        self.assertIn("/BJS-SHA?", request.call_args.args[0])
+        self.assertEqual(len(result.quotes), 1)
+        quote = result.quotes[0]
+        self.assertEqual(quote.price, Decimal("570"))
+        self.assertEqual((quote.origin, quote.origin_airport, quote.destination_airport), ("PEK", "PEK", "PVG"))
+
+    def test_domestic_airport_query_does_not_accept_missing_airport_codes(self):
+        route = replace(ROUTE, origin="PEK", origin_scope="airport", origin_city_code="BJS")
+        self.assertEqual(TongchengProvider()._parse(state(), route, DAY).quotes, [])
+
+    def test_international_calendar_limitation_is_not_a_platform_airport_claim(self):
+        route = replace(INTL_ROUTE, origin="PVG", origin_scope="airport", origin_city_code="SHA")
+        with self.assertRaisesRegex(ProviderUnsupported, "本程序.*不代表同程不支持"):
+            TongchengProvider().search(route, INTL_DAY)
+
     def setUp(self):
         self.provider = TongchengProvider(request_delay=0)
 

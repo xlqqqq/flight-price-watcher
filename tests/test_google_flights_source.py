@@ -59,6 +59,56 @@ class GooglePageTests(unittest.TestCase):
         self.assertEqual(quote.stops, 1)
         self.assertIn("未公布价格", result.warnings[0])
 
+    def airport_sample(self, sides=("origin", "destination")):
+        data = sample()
+        route = replace(ROUTE, origin_city_code="SHA", destination_city_code="TYO")
+        for index, side, code in ((0, "origin", "PVG"), (1, "destination", "NRT")):
+            if side not in sides:
+                continue
+            place = data["query"][2][index]
+            place[0] = [code, 0]
+            while len(place) <= 5:
+                place.append(None)
+            place[5] = 0
+            data["query"][1][1][13][0][index] = [[[code, 0]]]
+            data["data"][1][0][index][0][0] = [code, 0]
+            route = replace(route, **{side: code, side + "_scope": "airport"})
+        return data, route
+
+    def test_exact_airports_and_mixed_city_airport_scopes(self):
+        for sides in [("origin",), ("destination",), ("origin", "destination")]:
+            data, route = self.airport_sample(sides)
+            result = self.parse(html(data), route)
+            self.assertTrue(result.quotes)
+            for quote in result.quotes:
+                self.assertEqual((quote.origin, quote.destination), (route.origin, route.destination))
+                self.assertEqual((quote.origin_airport, quote.destination_airport), ("PVG", "NRT"))
+
+    def test_airport_request_rejects_city_echo_and_wrong_airport(self):
+        data, route = self.airport_sample()
+        with self.assertRaises(ProviderError):
+            self.parse(html(), route)
+        data["query"][2][0][0] = ["SHA", 0]
+        with self.assertRaisesRegex(ProviderError, "机场"):
+            self.parse(html(data), route)
+
+    def test_specific_airport_excludes_cheaper_other_airport(self):
+        data, route = self.airport_sample()
+        data["data"][3][0][0][0][3] = "SHA"
+        result = self.parse(html(data), route)
+        self.assertTrue(all(quote.origin_airport == "PVG" for quote in result.quotes))
+        self.assertNotEqual(min(quote.price for quote in result.quotes), Decimal("2102"))
+
+    def test_airport_search_url_requests_iata_airports(self):
+        data, route = self.airport_sample()
+        provider = GoogleFlightsProvider(request_delay=0)
+        with patch.object(provider, "_request", return_value=html(data)) as request:
+            result = provider.search(route, TODAY)
+        query = parse_qs(urlsplit(request.call_args.args[0]).query)["q"][0]
+        self.assertIn("PVG airport", query)
+        self.assertIn("NRT airport", query)
+        self.assertTrue(result.quotes)
+
     def test_price_history_does_not_influence_quote_minimum(self):
         data = sample()
         data["data"][5] = [None, [None, 1]]

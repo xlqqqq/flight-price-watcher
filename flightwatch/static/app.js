@@ -911,7 +911,8 @@
       const card = element("li", `source-card source-${status}`);
       card.dataset.provider = source.id;
       const top = element("div", "source-card-top");
-      const statusText = statuses[status] || "状态未返回";
+      const statusText = status === "unsupported" && String(source.message || "").includes("尚未接入")
+        ? "本程序尚未接入机场筛选" : statuses[status] || "状态未返回";
       top.append(element("strong", "source-name", source.name || providerName(source.id)), element("span", "source-status", statusText));
       const matches = comparable.filter((quote) => quote.provider === source.id);
       const sourceQuotes = quotes.filter((quote) => quote.provider === source.id);
@@ -929,6 +930,11 @@
       if (source.status === "pending") detail = "结果返回后自动更新";
       else if (Number.isFinite(source.elapsed_seconds)) detail += ` · 用时 ${source.elapsed_seconds} 秒`;
       card.append(top, element("p", "source-detail", detail));
+      if (status === "unsupported" || status === "error") {
+        const reason = element("p", "source-reason", String(source.message || "").split("；")[0]);
+        reason.title = source.message || "";
+        card.append(reason);
+      }
       if (source.message) {
         const more = element("details", "source-more");
         more.append(element("summary", "source-more-summary", "查看查询详情"), element("p", "source-message", source.message));

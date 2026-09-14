@@ -109,7 +109,7 @@ class CtripCalendarProvider:
     def search(self, route: Route, today: date) -> SearchResult:
         if route.origin_scope == "airport" or route.destination_scope == "airport":
             raise ProviderUnsupported(
-                "携程低价日历只回显城市，无法核实指定机场；本次未发起网络查询"
+                "本程序接入的携程日历只有城市最低价，尚未接入携程航班机场筛选；不代表携程不支持该机场"
             )
         if route.currency != "CNY":
             raise ProviderError("携程日历仅支持 CNY，不会将其他币种当作人民币")

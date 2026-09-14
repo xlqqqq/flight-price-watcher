@@ -247,7 +247,7 @@ class FliggyProvider:
         if route.market == "international" and (
                 route.origin_scope == "airport" or route.destination_scope == "airport"):
             raise ProviderUnsupported(
-                "飞猪国际最低价日历不返回实际机场，无法核实指定机场；本次未发起网络查询"
+                "本程序接入的飞猪国际日历不返回实际机场，尚未接入国际航班机场筛选；不代表飞猪不支持该机场"
             )
         # Validate scope and required owning-city metadata before any request.
         _city_query_code(route, "origin")

@@ -85,6 +85,7 @@
 @media(max-width:780px){.source-list{grid-template-columns:repeat(2,minmax(0,1fr))}.results-panel .panel-heading h2{font-size:16px}}
 @media(max-width:430px){.source-list{grid-template-columns:1fr}.results-panel .panel-heading h2{font-size:15px}.source-summary{margin-bottom:19px}}
 .results-column,.results-panel{min-width:0}
+.source-reason{font-size:10px;line-height:1.7;color:#8c7350;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:7px 0;overflow-wrap:anywhere}
 .airport-scope-field{margin-top:8px;min-width:0;padding-top:10px;border-top:1px solid #e4ebf6}.airport-scope-field label{font-size:11px;color:#526984;margin-bottom:7px}.airport-scope-field select{width:100%;min-width:0;text-overflow:ellipsis}.airport-scope-field .field-hint{display:block;margin-top:7px}.airport-scope-field .text-button{margin-top:6px}
 .table-scroll{max-width:100%}
 .table-scroll-hint{display:none;font-size:9px;line-height:1.7;color:#97a7bd;margin:0 0 9px}

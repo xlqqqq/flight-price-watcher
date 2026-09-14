@@ -280,7 +280,7 @@ class TongchengProvider:
 
     @staticmethod
     def _url(route: Route, day: date) -> str:
-        return (f"https://www.ly.com/flights/itinerary/oneway/{route.origin}-{route.destination}?"
+        return (f"https://www.ly.com/flights/itinerary/oneway/{route.city_code('origin')}-{route.city_code('destination')}?"
                 + urllib.parse.urlencode({"date": day.isoformat()}))
 
     @staticmethod
@@ -409,9 +409,9 @@ class TongchengProvider:
         return data
 
     def search(self, route: Route, today: date) -> SearchResult:
-        if route.origin_scope == "airport" or route.destination_scope == "airport":
+        if route.market == "international" and (route.origin_scope == "airport" or route.destination_scope == "airport"):
             raise ProviderUnsupported(
-                "同程当前公开数据只核实到城市，无法核实指定机场；本次未发起网络查询"
+                "本程序接入的同程国际日历只有城市最低价，尚未接入国际航班机场筛选；不代表同程不支持该机场"
             )
         if route.currency != "CNY":
             raise ProviderUnsupported("同程公开网页只提供 CNY 价格")
@@ -528,7 +528,7 @@ class TongchengProvider:
         book = state.get("book1") if isinstance(state, dict) else None
         if data.get("serverRendered") is not True or not isinstance(book, dict):
             raise ProviderError("同程网页未返回航班状态，可能是验证页或页面已变化")
-        if (book.get("Departure") != route.origin or book.get("Arrival") != route.destination
+        if (book.get("Departure") != route.city_code("origin") or book.get("Arrival") != route.city_code("destination")
                 or book.get("DepartureDate") != day.isoformat() or book.get("hasReturn") is not False):
             raise ProviderError("同程网页航线、日期或单程标记与请求不一致")
         rows = book.get("flightLists")
@@ -538,9 +538,14 @@ class TongchengProvider:
         for row in rows:
             if not isinstance(row, dict):
                 raise ProviderError("同程航班字段发生变化")
-            if (row.get("departureCityCode") != route.origin
-                    or row.get("arrivalCityCode") != route.destination):
+            if (row.get("departureCityCode") != route.city_code("origin")
+                    or row.get("arrivalCityCode") != route.city_code("destination")):
                 raise ProviderError("同程航班城市与请求不一致")
+            origin_airport, destination_airport = row.get("originAirportCode"), row.get("arriveAirportCode")
+            if ((route.origin_scope == "airport" and origin_airport != route.origin)
+                    or (route.destination_scope == "airport" and destination_airport != route.destination)):
+                skipped += 1
+                continue
             try:
                 departure = datetime.strptime(row["flyOffTime"], "%Y-%m-%d %H:%M")
             except (KeyError, TypeError, ValueError):
@@ -579,6 +584,8 @@ class TongchengProvider:
                 currency="CNY", source="同程公开航班页", airline=airline,
                 flight_number=flight_number, stops=stops, url=self._url(route, day),
                 provider="tongcheng", price_basis="total",
+                origin_airport=origin_airport if isinstance(origin_airport, str) and re.fullmatch(r"[A-Z]{3}", origin_airport) else "",
+                destination_airport=destination_airport if isinstance(destination_airport, str) and re.fullmatch(r"[A-Z]{3}", destination_airport) else "",
                 price_note=(f"同程网页本次返回的 {len(rows)} 个航班范围内参考价；"
                             f"1 成人单程，票价 {fare} + 机建 {airport_fee} + 燃油 {fuel_fee} 元；"
                             "平台默认舱位，不含可选服务，最终可售价格及行李请到购票页确认"),

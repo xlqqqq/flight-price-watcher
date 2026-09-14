@@ -23,8 +23,6 @@ class UnsupportedAirportScopeTests(unittest.TestCase):
         providers = [
             CtripCalendarProvider(request_delay=0),
             QunarCalendarProvider(request_delay=0),
-            TongchengProvider(request_delay=0),
-            GoogleFlightsProvider(request_delay=0),
         ]
         for provider in providers:
             for route in (
