@@ -36,6 +36,7 @@ class RyanairTests(unittest.TestCase):
         self.assertEqual(q.price, Decimal("136.26"))
         self.assertEqual(q.currency, "CNY")
         self.assertFalse(q.comparable)
+        self.assertEqual((q.origin_airport, q.destination_airport), ("STN", "DUB"))
         self.assertIn("GBP 14.99", q.price_note)
         self.assertIn("2026-09-08", q.price_note)
         self.assertIn("STN", q.url)
@@ -76,6 +77,52 @@ class RyanairTests(unittest.TestCase):
             result = self.provider.search(self.route, TODAY)
         self.assertEqual(len(result.quotes), 1)
         self.assertTrue(any("LTN" in warning for warning in result.warnings))
+
+    def test_airport_scope_requests_only_the_exact_catalogue_airport(self):
+        route = Route(
+            "exact", "斯坦斯特德→都柏林", "STN", "DUB", "ryanair",
+            market="international", dates=(DAY,),
+            origin_scope="airport", destination_scope="airport",
+            origin_city_code="LON", destination_city_code="DUB",
+        )
+        self.provider._airports = AIRPORTS
+        urls = []
+
+        def fetch(url):
+            urls.append(url)
+            return RATE if "frankfurter" in url else FARES
+
+        with patch.object(self.provider, "_request", side_effect=fetch):
+            result = self.provider.search(route, TODAY)
+        self.assertEqual(len(result.quotes), 1)
+        self.assertEqual(
+            (result.quotes[0].origin, result.quotes[0].destination,
+             result.quotes[0].origin_airport, result.quotes[0].destination_airport),
+            ("STN", "DUB", "STN", "DUB"),
+        )
+        calendar_urls = [url for url in urls if "cheapestPerDay" in url]
+        self.assertEqual(len(calendar_urls), 1)
+        self.assertIn("/STN/DUB/", calendar_urls[0])
+        self.assertFalse(any("/LTN/" in url for url in calendar_urls))
+
+    def test_airport_scope_rejects_missing_or_wrong_owner_without_fare_request(self):
+        self.provider._airports = AIRPORTS
+        missing = Route(
+            "exact", "机场", "STN", "DUB", "ryanair", market="international",
+            dates=(DAY,), origin_scope="airport", origin_city_code="",
+        )
+        with patch.object(self.provider, "_request") as request, self.assertRaises(ProviderUnsupported):
+            self.provider.search(missing, TODAY)
+        request.assert_not_called()
+
+        wrong = Route(
+            "exact", "机场", "STN", "DUB", "ryanair", market="international",
+            dates=(DAY,), origin_scope="airport", origin_city_code="MAN",
+        )
+        with patch.object(self.provider, "_request") as request, \
+                self.assertRaisesRegex(ProviderUnsupported, "不属于"):
+            self.provider.search(wrong, TODAY)
+        request.assert_not_called()
 
     def test_all_source_failures_are_reported_as_error(self):
         self.provider._airports = AIRPORTS

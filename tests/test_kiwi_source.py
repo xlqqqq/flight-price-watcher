@@ -73,6 +73,7 @@ class KiwiDealsTests(unittest.TestCase):
         self.assertEqual(quote.currency, "CNY")
         self.assertEqual(quote.price_basis, "unknown")
         self.assertFalse(quote.comparable)
+        self.assertEqual((quote.origin_airport, quote.destination_airport), ("PVG", "HND"))
         self.assertIsNone(quote.stops)
         self.assertIn("不参与", " ".join(result.warnings))
 
@@ -146,6 +147,58 @@ class KiwiDealsTests(unittest.TestCase):
         self.assertEqual(request.call_count, 6)
         self.assertIn("type=subentity", request.call_args_list[1].args[0])
         self.assertEqual(request.call_args_list[-1].args[0], PAGE_URL)
+
+    def test_airport_scope_queries_owner_cities_and_filters_actual_airports(self):
+        route = replace(
+            ROUTE, origin="PVG", destination="HND",
+            origin_scope="airport", destination_scope="airport",
+            origin_city_code="SHA", destination_city_code="TYO",
+        )
+        provider = KiwiDealsProvider(request_delay=0)
+        responses = [
+            city_payload(ORIGIN), airports_payload(ORIGIN),
+            city_payload(DESTINATION), airports_payload(DESTINATION),
+            html(schema(offer())),
+        ]
+        with patch.object(provider, "_request", side_effect=responses) as request:
+            result = provider.search(route, TODAY)
+        self.assertEqual(len(result.quotes), 1)
+        quote = result.quotes[0]
+        self.assertEqual((quote.origin, quote.destination), ("PVG", "HND"))
+        self.assertEqual((quote.origin_airport, quote.destination_airport), ("PVG", "HND"))
+        self.assertIn("term=SHA", request.call_args_list[0].args[0])
+        self.assertIn("term=TYO", request.call_args_list[2].args[0])
+        self.assertEqual(request.call_args_list[-1].args[0], PAGE_URL)
+
+        wrong = offer()
+        wrong["item"]["itemOffered"]["itinerary"]["itemListElement"][0][
+            "departureAirport"
+        ]["iataCode"] = "SHA"
+        restricted_origin = {**ORIGIN, "airports": frozenset({"PVG"})}
+        restricted_destination = {**DESTINATION, "airports": frozenset({"HND"})}
+        parsed = provider._parse(
+            html(schema(wrong)), route, TODAY, {DAY},
+            restricted_origin, restricted_destination, PAGE_URL,
+        )
+        self.assertEqual(parsed.quotes, [])
+
+    def test_airport_scope_requires_owner_and_verified_membership(self):
+        provider = KiwiDealsProvider(request_delay=0)
+        missing_owner = replace(
+            ROUTE, origin="PVG", origin_scope="airport", origin_city_code="",
+        )
+        with patch.object(provider, "_request") as request, self.assertRaises(ProviderUnsupported):
+            provider.search(missing_owner, TODAY)
+        request.assert_not_called()
+
+        wrong_owner = replace(
+            ROUTE, origin="SZX", origin_scope="airport", origin_city_code="SHA",
+        )
+        with patch.object(provider, "_request", side_effect=[
+            city_payload(ORIGIN), airports_payload(ORIGIN),
+        ]) as request, self.assertRaisesRegex(ProviderUnsupported, "未确认.*属于"):
+            provider.search(wrong_owner, TODAY)
+        self.assertEqual(request.call_count, 2)
 
     def test_cold_city_requires_exact_code_not_first_suggestion(self):
         provider = KiwiDealsProvider()

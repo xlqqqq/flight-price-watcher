@@ -54,6 +54,7 @@ class GooglePageTests(unittest.TestCase):
         self.assertEqual((quote.origin, quote.destination, quote.departure_date), ("SHA", "TYO", DAY))
         self.assertEqual(quote.currency, "CNY")
         self.assertTrue(quote.comparable)
+        self.assertEqual((quote.origin_airport, quote.destination_airport), ("PVG", "NRT"))
         self.assertEqual(quote.flight_number, "BR705/BR108")
         self.assertEqual(quote.stops, 1)
         self.assertIn("未公布价格", result.warnings[0])

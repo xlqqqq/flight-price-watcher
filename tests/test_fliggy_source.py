@@ -73,6 +73,7 @@ class FliggyParserTests(unittest.TestCase):
         quote = self.provider._parse(parse_jsonp(encode(response()).decode()), ROUTE, DAY).quotes[0]
         self.assertEqual(quote.price, Decimal("530"))
         self.assertEqual(quote.price_basis, "total")
+        self.assertEqual((quote.origin_airport, quote.destination_airport), ("PKX", "PVG"))
         self.assertEqual(quote.provider, "fliggy")
         self.assertEqual(quote.currency, "CNY")
         self.assertEqual(quote.airline, "东航")
@@ -138,6 +139,24 @@ class FliggyParserTests(unittest.TestCase):
                 self.provider._parse(data, ROUTE, DAY)
         with self.assertRaisesRegex(ProviderError, "日期"):
             self.provider._parse(response([flight(depTime="2026-09-24 22:00")]), ROUTE, DAY)
+
+    def test_domestic_airport_scope_filters_actual_airports(self):
+        route = replace(
+            ROUTE, origin="PKX", destination="PVG",
+            origin_scope="airport", destination_scope="airport",
+            origin_city_code="BJS", destination_city_code="SHA",
+        )
+        wrong = flight(flightNo="MU0001", depAirport="PEK", arrAirport="PVG")
+        exact = flight(flightNo="MU5231", depAirport="PKX", arrAirport="PVG")
+        result = self.provider._parse(response([wrong, exact]), route, DAY)
+        self.assertEqual(len(result.quotes), 1)
+        quote = result.quotes[0]
+        self.assertEqual((quote.origin, quote.destination), ("PKX", "PVG"))
+        self.assertEqual((quote.origin_airport, quote.destination_airport), ("PKX", "PVG"))
+        self.assertIn("排除 1 条实际起降机场", " ".join(result.warnings))
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(quote.url).query)
+        self.assertEqual(query["depCity"], ["BJS"])
+        self.assertEqual(query["arrCity"], ["SHA"])
 
     def test_transfer_total_is_not_guessed_from_first_leg(self):
         data = response([{"isTransfer": True, "transferFlight": [{"totalInfo": {"lowestPrice": 1}}]}, flight()])
@@ -280,6 +299,33 @@ class FliggyTransportTests(unittest.TestCase):
                 request.assert_not_called()
                 calendar.assert_not_called()
                 week_calendar.assert_not_called()
+
+        airport_international = replace(
+            INTL_ROUTE, origin="PVG", origin_scope="airport", origin_city_code="SHA",
+        )
+        with patch.object(provider, "_request") as request, \
+                patch.object(provider, "_request_month_calendar") as calendar, \
+                self.assertRaises(ProviderUnsupported):
+            provider.search(airport_international, INTL_DAY)
+        request.assert_not_called()
+        calendar.assert_not_called()
+
+    def test_domestic_airport_scope_uses_owner_city_and_requires_owner(self):
+        route = replace(
+            ROUTE, origin="PKX", destination="PVG",
+            origin_scope="airport", destination_scope="airport",
+            origin_city_code="BJS", destination_city_code="SHA",
+        )
+        provider = FliggyProvider(request_delay=0)
+        with patch.object(provider, "_request", return_value=response()) as request:
+            quote = provider.search(route, DAY).quotes[0]
+        request.assert_called_once_with(route, DAY)
+        self.assertEqual((quote.origin_airport, quote.destination_airport), ("PKX", "PVG"))
+
+        missing = replace(route, origin_city_code="")
+        with patch.object(provider, "_request") as request, self.assertRaises(ProviderUnsupported):
+            provider.search(missing, DAY)
+        request.assert_not_called()
 
     def test_bad_city_code_rejected_before_network(self):
         provider = FliggyProvider()

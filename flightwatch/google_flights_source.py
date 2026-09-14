@@ -197,6 +197,10 @@ class GoogleFlightsProvider:
 
     def search(self, route: Route, today: date) -> SearchResult:
         self._check_cancelled()
+        if route.origin_scope == "airport" or route.destination_scope == "airport":
+            raise ProviderUnsupported(
+                "Google Flights 当前解析只核实城市实体，无法保证指定机场；本次未发起网络查询"
+            )
         if route.currency != "CNY":
             raise ProviderUnsupported("Google Flights 当前适配仅核实 CNY 人民币报价")
         if route.stay_nights is not None or route.nonstop or route.travel_class != 1:
@@ -374,6 +378,7 @@ class GoogleFlightsProvider:
                 price=price, currency="CNY", source="Google Flights 公开航班页",
                 airline=airline, flight_number="/".join(flight_numbers), stops=len(segments) - 1,
                 url=url, price_note=PRICE_NOTE, provider="google_flights", price_basis="total",
+                origin_airport=_get(flight, 3), destination_airport=_get(flight, 6),
             ))
         notes = []
         if excluded:

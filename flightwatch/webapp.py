@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -9,6 +10,7 @@ import threading
 import time
 import uuid
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -17,15 +19,23 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 from .config import Settings, get_timezone, integer, money
+from . import __version__
 from .models import ConfigError, ProviderError, Route
 from .monitor import run_cycle
 from .notifier import NotificationError
-from .sources import DEFAULT_SOURCES, PROVIDERS, MultiSourceProvider, additional_platform_links, normalize_sources
+from .sources import DEFAULT_SOURCES, PROVIDERS, MultiSourceProvider, normalize_sources
 from .state import State
 
 ROOT = Path(__file__).resolve().parent.parent
 TZ = get_timezone("Asia/Shanghai")
 LOG = logging.getLogger(__name__)
+MAX_WEB_TRIPS = 10
+TRIP_FIELDS = {"origin", "destination", "market", "start_date", "end_date",
+               "threshold", "mode", "providers",
+               "origin_scope", "destination_scope",
+               "origin_city_code", "destination_city_code",
+               "origin_label", "destination_label"}
+GLOBAL_FIELDS = {"interval_minutes", "notify"}
 
 
 def now_iso():
@@ -38,32 +48,72 @@ def known_city(value):
     return resolve_city(value) or cached_city(value)
 
 
-def normalize_form(raw: dict, today: date | None = None) -> dict:
-    today = today or datetime.now(TZ).date()
+def known_place(value, scope="city", city_code=None):
+    """Resolve cached official place metadata without doing network I/O."""
+    from .city_search import cached_place
+    if scope == "city":
+        return known_city(value)
+    return cached_place(value, scope="airport", city_code=city_code)
+
+
+def _safe_place_label(value, field):
+    if value in (None, ""):
+        return ""
+    if not isinstance(value, str):
+        raise ConfigError(f"{field}地点名称无效")
+    label = " ".join(value.split())
+    if not label or len(label) > 160 or any(ord(ch) < 32 for ch in label):
+        raise ConfigError(f"{field}地点名称无效")
+    return label
+
+
+def _normalize_trip(raw: dict, today: date) -> dict:
     if not isinstance(raw, dict):
         raise ConfigError("请输入航线和出发日期")
-    allowed = {"origin", "destination", "market", "start_date", "end_date",
-               "threshold", "mode", "interval_minutes", "notify", "providers"}
-    if set(raw) - allowed:
+    if set(raw) - TRIP_FIELDS:
         raise ConfigError("请求包含不支持的选项")
     data = {}
+    places = []
     for field in ("origin", "destination"):
         value = raw.get(field, "")
         if not isinstance(value, str):
             raise ConfigError("请选择出发地和目的地")
-        city = known_city(value.strip())
-        code = city["code"] if city else value.strip().upper()
+        scope = raw.get(f"{field}_scope", "city")
+        if scope not in {"city", "airport"}:
+            raise ConfigError("地点范围只能选择城市（全部机场）或具体机场")
+        supplied_city_code = raw.get(f"{field}_city_code", "")
+        if not isinstance(supplied_city_code, str):
+            raise ConfigError("所属城市代码无效")
+        supplied_city_code = supplied_city_code.strip().upper()
+        if supplied_city_code and not re.fullmatch(r"[A-Z]{3}", supplied_city_code):
+            raise ConfigError("所属城市代码必须是三字码")
+        place = known_place(value.strip(), scope, supplied_city_code or None)
+        code = place["code"] if place else value.strip().upper()
         if not re.fullmatch("[A-Z]{3}", code):
-            raise ConfigError("请选择城市，或输入城市三字码")
+            raise ConfigError("请选择城市（全部机场）或具体机场")
+        city_code = place.get("city_code", "") if place else supplied_city_code
+        if scope == "city":
+            if city_code and city_code != code:
+                raise ConfigError("城市范围的查询码与所属城市码不一致")
+            city_code = code
+        elif not city_code:
+            raise ConfigError("选择具体机场时必须保留其所属城市码，请重新搜索并选择机场")
+        label = (place or {}).get("label") or _safe_place_label(raw.get(f"{field}_label"), field)
+        if not label:
+            name = (place or {}).get("name", code)
+            label = f"{name}（{code} · 全部机场）" if scope == "city" else f"{name}（{code}）"
         data[field] = code
-    if data["origin"] == data["destination"]:
-        raise ConfigError("出发地和目的地不能相同")
+        data[f"{field}_scope"] = scope
+        data[f"{field}_city_code"] = city_code
+        data[f"{field}_label"] = label
+        places.append(place)
+    if data["origin_city_code"] == data["destination_city_code"]:
+        raise ConfigError("出发地和目的地不能相同或属于同一城市")
     market = raw.get("market", "domestic")
     if market not in ("domestic", "international"):
         raise ConfigError("请选择国内或国际航线")
-    cities = [known_city(data[key]) for key in ("origin", "destination")]
-    if all(cities):
-        expected = "domestic" if all(c["market"] == "domestic" for c in cities) else "international"
+    if all(places):
+        expected = "domestic" if all(c["market"] == "domestic" for c in places) else "international"
         if market != expected:
             raise ConfigError("国内/国际选择与城市不匹配，请调整航线类型")
     data["market"] = market
@@ -87,28 +137,180 @@ def normalize_form(raw: dict, today: date | None = None) -> dict:
     if threshold is not None and threshold > 1000000:
         raise ConfigError("目标价不能超过 1000000 元")
     data.update(mode=mode, threshold=float(threshold) if threshold is not None else None)
-    data["interval_minutes"] = integer(raw.get("interval_minutes", 360), "查询间隔（分钟）", 10, 10080)
-    channel = raw.get("notify", "wechat")
-    if channel not in ("wechat", "browser", "serverchan"):
-        raise ConfigError("请选择微信文件传输助手、微信服务号或网页提醒")
-    data["notify"] = channel
     data["providers"] = list(normalize_sources(raw.get("providers", DEFAULT_SOURCES)))
     return data
 
 
+def _normalize_globals(raw: dict) -> dict:
+    data = {
+        "interval_minutes": integer(raw.get("interval_minutes", 360), "查询间隔（分钟）", 10, 10080),
+    }
+    channel = raw.get("notify", "wechat")
+    if channel not in ("wechat", "browser", "serverchan"):
+        raise ConfigError("请选择微信文件传输助手、微信服务号或网页提醒")
+    data["notify"] = channel
+    return data
+
+
+def normalize_form(raw: dict, today: date | None = None) -> dict:
+    """Normalize the original single-trip request without changing its schema."""
+    today = today or datetime.now(TZ).date()
+    if not isinstance(raw, dict):
+        raise ConfigError("请输入航线和出发日期")
+    if set(raw) - (TRIP_FIELDS | GLOBAL_FIELDS):
+        raise ConfigError("请求包含不支持的选项")
+    return {**_normalize_trip({key: value for key, value in raw.items() if key in TRIP_FIELDS}, today),
+            **_normalize_globals(raw)}
+
+
+def normalize_request(raw: dict, today: date | None = None) -> dict:
+    """Accept either the original flat request or a multi-trip envelope."""
+    today = today or datetime.now(TZ).date()
+    if not isinstance(raw, dict):
+        raise ConfigError("请输入航线和出发日期")
+    if "trips" not in raw:
+        return normalize_form(raw, today)
+    if set(raw) - ({"trips"} | GLOBAL_FIELDS):
+        raise ConfigError("多行程请求包含不支持的选项")
+    values = raw.get("trips")
+    if not isinstance(values, list) or not 1 <= len(values) <= MAX_WEB_TRIPS:
+        raise ConfigError(f"请添加 1～{MAX_WEB_TRIPS} 条行程")
+    trips = []
+    signatures = set()
+    for index, value in enumerate(values, 1):
+        try:
+            trip = _normalize_trip(value, today)
+        except ConfigError as exc:
+            raise ConfigError(f"第 {index} 条行程：{exc}") from None
+        signature = json.dumps(trip, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        if signature in signatures:
+            raise ConfigError(f"第 {index} 条行程与清单中的另一条完全重复")
+        signatures.add(signature)
+        trips.append(trip)
+    return {"trips": trips, **_normalize_globals(raw)}
+
+
+def _trips_in(form: dict) -> tuple[dict, ...]:
+    return tuple(form["trips"]) if "trips" in form else (form,)
+
+
 def settings_for(form: dict, data_dir: Path) -> Settings:
-    start, end = date.fromisoformat(form["start_date"]), date.fromisoformat(form["end_date"])
-    names = [(known_city(form[k]) or {"name": form[k]})["name"] for k in ("origin", "destination")]
-    route = Route(
-        id=f"dashboard-{form['notify']}", name=" → ".join(names),
-        origin=form["origin"], destination=form["destination"], provider="multi",
-        market=form["market"], mode=form["mode"],
-        threshold=Decimal(str(form["threshold"])) if form["threshold"] is not None else None,
-        dates=tuple(start + timedelta(days=i) for i in range((end - start).days + 1)),
-        sources=tuple(form["providers"]),
+    trips = _trips_in(form)
+    routes = []
+    for trip in trips:
+        start, end = date.fromisoformat(trip["start_date"]), date.fromisoformat(trip["end_date"])
+        names = [trip.get(f"{key}_label") or (known_city(trip[key]) or {"name": trip[key]})["name"]
+                 for key in ("origin", "destination")]
+        if "trips" in form:
+            identity = {key: value for key, value in trip.items() if not key.endswith("_label")}
+            stable = json.dumps({"notify": form["notify"], **identity}, ensure_ascii=True,
+                                sort_keys=True, separators=(",", ":"))
+            route_id = f"dashboard-{form['notify']}-{hashlib.sha256(stable.encode()).hexdigest()[:20]}"
+        else:
+            # Preserve the historic state key for existing one-trip monitors.
+            route_id = f"dashboard-{form['notify']}"
+        routes.append(Route(
+            id=route_id, name=" → ".join(names),
+            origin=trip["origin"], destination=trip["destination"], provider="multi",
+            market=trip["market"], mode=trip["mode"],
+            threshold=Decimal(str(trip["threshold"])) if trip["threshold"] is not None else None,
+            dates=tuple(start + timedelta(days=i) for i in range((end - start).days + 1)),
+            sources=tuple(trip["providers"]),
+            origin_scope=trip.get("origin_scope", "city"),
+            destination_scope=trip.get("destination_scope", "city"),
+            origin_city_code=trip.get("origin_city_code", trip["origin"]),
+            destination_city_code=trip.get("destination_city_code", trip["destination"]),
+            origin_label=trip.get("origin_label", ""),
+            destination_label=trip.get("destination_label", ""),
+        ))
+    return Settings(tuple(routes), TZ, form["interval_minutes"], 24, 24, Decimal("1"),
+                    30, 1.0, 160, data_dir / "dashboard.sqlite3")
+
+
+def _quote_payload(quote, route_id: str) -> dict:
+    return dict(
+        route_id=route_id,
+        origin=quote.origin,
+        destination=quote.destination,
+        origin_airport=getattr(quote, "origin_airport", ""),
+        destination_airport=getattr(quote, "destination_airport", ""),
+        departure_date=quote.departure_date.isoformat(),
+        return_date=quote.return_date.isoformat() if quote.return_date else None,
+        price=float(quote.price),
+        currency=quote.currency,
+        url=quote.url,
+        price_note=quote.price_note,
+        source=quote.source,
+        provider=quote.provider,
+        airline=quote.airline,
+        flight_number=quote.flight_number,
+        stops=quote.stops,
+        price_basis=quote.price_basis,
+        comparable=quote.comparable,
+        original_price=float(quote.original_price) if quote.original_price is not None else None,
+        original_currency=quote.original_currency,
+        exchange_rate=str(quote.exchange_rate) if quote.exchange_rate is not None else None,
+        exchange_date=quote.exchange_date.isoformat() if quote.exchange_date else None,
     )
-    return Settings((route,), TZ, form["interval_minutes"], 24, 24, Decimal("1"),
-                    30, 1.0, 60, data_dir / "dashboard.sqlite3")
+
+
+def _trip_snapshot(trip: dict, route: Route, *, result=None, error: str | None = None,
+                   queried_at: str) -> dict:
+    quotes = [] if result is None else [_quote_payload(quote, route.id) for quote in result.quotes]
+    quotes.sort(key=lambda quote: (quote["departure_date"], quote["price"], quote["provider"]))
+    if error is None and not any(quote["comparable"] for quote in quotes):
+        error = "所选平台暂未返回可比较的参考总价；请查看该行程的平台状态。"
+    return dict(
+        route_id=route.id,
+        name=route.name,
+        origin=route.origin,
+        destination=route.destination,
+        origin_scope=route.origin_scope,
+        destination_scope=route.destination_scope,
+        origin_city_code=route.city_code("origin"),
+        destination_city_code=route.city_code("destination"),
+        origin_label=route.origin_label,
+        destination_label=route.destination_label,
+        market=route.market,
+        start_date=trip["start_date"],
+        end_date=trip["end_date"],
+        settings=dict(trip),
+        queried_at=queried_at,
+        quotes=quotes,
+        warnings=[] if result is None else list(result.warnings),
+        sources=[] if result is None else list(result.sources),
+        error=error,
+    )
+
+
+def _combined_snapshot(form: dict, trips: list[dict], queried_at: str) -> dict:
+    if len(trips) == 1:
+        # Keep every original single-trip field at the top level.  New clients
+        # can consistently consume ``trips`` while old clients remain valid.
+        snapshot = dict(trips[0])
+        snapshot.update(queried_at=queried_at, settings=form, trips=trips)
+        return snapshot
+    quotes = [quote for trip in trips for quote in trip["quotes"]]
+    warnings = [f"{trip['name']}：{warning}" for trip in trips for warning in trip["warnings"]]
+    unavailable = [trip for trip in trips if trip["error"]]
+    error = None
+    partial_error = None
+    if len(unavailable) == len(trips):
+        error = f"全部 {len(trips)} 条行程暂未返回可比较的参考总价，请分别查看平台状态。"
+    elif unavailable:
+        partial_error = f"{len(unavailable)}/{len(trips)} 条行程暂未返回可比较的参考总价。"
+    return dict(
+        queried_at=queried_at,
+        settings=form,
+        trips=trips,
+        trip_count=len(trips),
+        successful_trip_count=len(trips) - len(unavailable),
+        quotes=quotes,
+        warnings=warnings,
+        sources=[],
+        error=error,
+        partial_error=partial_error,
+    )
 
 
 class Dashboard:
@@ -135,19 +337,22 @@ class Dashboard:
         from .serverchan_settings import channel_status
         today = datetime.now(TZ).date()
         defaults = dict(origin="", destination="", market="auto",
+                        origin_scope="city", destination_scope="city",
+                        origin_city_code="", destination_city_code="",
+                        origin_label="", destination_label="",
                         start_date=(today + timedelta(days=7)).isoformat(),
                         end_date=(today + timedelta(days=21)).isoformat(),
                         threshold=600, mode="both", interval_minutes=360, notify="wechat",
                         providers=list(DEFAULT_SOURCES))
         try:
             saved = json.loads((self.data_dir / "web-settings.json").read_text(encoding="utf-8"))
-            defaults = normalize_form(saved, today)
+            defaults = normalize_request(saved, today)
         except (OSError, ValueError, TypeError):
             pass
         return dict(today=today.isoformat(), max_date=(today + timedelta(days=365)).isoformat(),
                     cities=CITIES, wechat=desktop_status(), defaults=defaults,
                     providers=list(PROVIDERS), serverchan=channel_status(self.data_dir),
-                    serverchan_binding=self._binding_status(), version="2.6.0")
+                    serverchan_binding=self._binding_status(), version=__version__)
 
     def city_lookup(self, query: str):
         from .cities import CITIES
@@ -163,9 +368,11 @@ class Dashboard:
             remote = search_cities(query)
         except ProviderError as exc:
             return {"cities": local[:20], "warning": f"{exc}；暂时显示匹配的常用城市，可稍后重试。"}
-        by_code = {city["code"]: city for city in remote}
+        by_code = {(city.get("scope", "city"), city["code"], city.get("city_code", city["code"])): city
+                   for city in remote}
         for city in local:
-            by_code.setdefault(city["code"], city)
+            key = (city.get("scope", "city"), city["code"], city.get("city_code", city["code"]))
+            by_code.setdefault(key, city)
         return {"cities": list(by_code.values())[:30]}
 
     def status(self):
@@ -201,14 +408,14 @@ class Dashboard:
             self.operation_id = None
 
     def search(self, raw):
-        form = normalize_form(raw)
+        form = normalize_request(raw)
         with self.lock:
             operation_id = self._claim()
         threading.Thread(target=self._query, args=(form, False, None, operation_id), daemon=True).start()
 
     def start(self, raw):
         from .desktop_notifier import desktop_status
-        form = normalize_form(raw)
+        form = normalize_request(raw)
         if form["notify"] == "wechat":
             status = desktop_status()
             if not status["available"]:
@@ -291,35 +498,53 @@ class Dashboard:
                 else:
                     time.sleep(delay)
             settings = settings_for(form, self.data_dir)
-            result = MultiSourceProvider(
-                timeout=30, cancelled=event.is_set if event is not None else None,
-            ).search(settings.routes[0], datetime.now(TZ).date())
-            quotes = [dict(departure_date=q.departure_date.isoformat(), price=float(q.price),
-                           currency=q.currency, url=q.url, price_note=q.price_note,
-                           source=q.source, provider=q.provider, price_basis=q.price_basis,
-                           comparable=q.comparable,
-                           original_price=float(q.original_price) if q.original_price is not None else None,
-                           original_currency=q.original_currency,
-                           exchange_rate=str(q.exchange_rate) if q.exchange_rate is not None else None,
-                           exchange_date=q.exchange_date.isoformat() if q.exchange_date else None)
-                      for q in result.quotes]
-            snapshot = dict(queried_at=now_iso(), origin=form["origin"], destination=form["destination"],
-                            market=form["market"], start_date=form["start_date"], end_date=form["end_date"],
-                            settings=form,
-                            additional_platforms=additional_platform_links(
-                                settings.routes[0], settings.routes[0].departure_dates(datetime.now(TZ).date())[0]),
-                            quotes=sorted(quotes, key=lambda q: q["departure_date"]),
-                            warnings=result.warnings, sources=result.sources, error=None)
-            if not any(q["comparable"] for q in quotes):
-                snapshot["error"] = "所选平台暂未返回可比较的参考总价；请查看各平台状态。"
+            trip_forms = _trips_in(form)
+            today = datetime.now(TZ).date()
+
+            def query_trip(item):
+                trip, route = item
+                if event is not None and event.is_set():
+                    error = ProviderError("监控已停止，取消该行程查询")
+                    return error, _trip_snapshot(trip, route, error=str(error), queried_at=queried_at)
+                try:
+                    result = MultiSourceProvider(
+                        timeout=settings.timeout_seconds,
+                        request_delay=settings.request_delay_seconds,
+                        max_requests=settings.max_requests_per_cycle,
+                        cancelled=event.is_set if event is not None else None,
+                    ).search(route, today)
+                    return result, _trip_snapshot(trip, route, result=result, queried_at=queried_at)
+                except (ProviderError, ConfigError) as exc:
+                    error = ProviderError(str(exc))
+                except Exception as exc:
+                    error = ProviderError(f"该行程查询未完成（{type(exc).__name__}），请稍后重试")
+                return error, _trip_snapshot(trip, route, error=str(error), queried_at=queried_at)
+
+            queried_at = now_iso()
+            items = list(zip(trip_forms, settings.routes))
+            if len(items) == 1:
+                outcomes = [query_trip(items[0])]
+            else:
+                # A small route-level pool prevents one slow itinerary from
+                # blocking every other one without multiplying source threads
+                # without bound.
+                with ThreadPoolExecutor(max_workers=min(3, len(items)),
+                                        thread_name_prefix="dashboard-trip") as pool:
+                    outcomes = list(pool.map(query_trip, items))
+            cached = {route.id: outcome for route, (outcome, _trip) in zip(settings.routes, outcomes)}
+            trip_snapshots = [trip for _outcome, trip in outcomes]
+            snapshot = _combined_snapshot(form, trip_snapshots, queried_at)
             with self.lock:
                 self.latest = snapshot
                 if monitor:
-                    self.monitor["last_error"] = snapshot["error"]
+                    self.monitor["last_error"] = snapshot.get("partial_error") or snapshot["error"]
             if monitor and not event.is_set():
                 app = self
                 class CachedProvider:
-                    def search(self, *args):
+                    def search(self, route, *_args):
+                        result = cached[route.id]
+                        if isinstance(result, ProviderError):
+                            raise result
                         return result
                 class Notifier:
                     def send(self, title, content):
@@ -358,16 +583,26 @@ class Dashboard:
                 # A history/notification failure happens after a valid query.
                 # Preserve its prices and platform reports for the user.
                 if snapshot is None:
-                    self.latest = dict(queried_at=now_iso(), origin=form["origin"], destination=form["destination"],
-                        market=form["market"], start_date=form["start_date"], end_date=form["end_date"],
-                        quotes=[], warnings=[], sources=[], error=str(exc))
+                    queried_at = now_iso()
+                    settings = settings_for(form, self.data_dir)
+                    failed = [_trip_snapshot(trip, route, error=str(exc), queried_at=queried_at)
+                              for trip, route in zip(_trips_in(form), settings.routes)]
+                    self.latest = _combined_snapshot(form, failed, queried_at)
                 if monitor:
                     self.monitor["last_error"] = str(exc)
         except Exception as exc:
             with self.lock:
                 if snapshot is None:
                     message = f"本次查询未完成（{type(exc).__name__}），请检查网络或稍后重试。"
-                    self.latest = dict(queried_at=now_iso(), quotes=[], warnings=[], sources=[], error=message)
+                    queried_at = now_iso()
+                    try:
+                        settings = settings_for(form, self.data_dir)
+                        failed = [_trip_snapshot(trip, route, error=message, queried_at=queried_at)
+                                  for trip, route in zip(_trips_in(form), settings.routes)]
+                        self.latest = _combined_snapshot(form, failed, queried_at)
+                    except Exception:
+                        self.latest = dict(queried_at=queried_at, settings=form, trips=[],
+                                           quotes=[], warnings=[], sources=[], error=message)
                 else:
                     message = f"报价已查询，但监控记录或提醒未完成（{type(exc).__name__}），请检查 data 目录及微信状态。"
                 self.monitor["last_error"] = message
@@ -494,7 +729,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Flightwatch/2.6"
+    server_version = f"Flightwatch/{__version__}"
     def log_message(self, *args):
         pass
 

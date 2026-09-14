@@ -160,6 +160,10 @@ class QunarCalendarProvider:
         return dict(result)
 
     def search(self, route: Route, today: date) -> SearchResult:
+        if route.origin_scope == "airport" or route.destination_scope == "airport":
+            raise ProviderUnsupported(
+                "去哪儿低价日历只回显城市，无法核实指定机场；本次未发起网络查询"
+            )
         if route.currency != "CNY":
             raise ProviderUnsupported("去哪儿日历仅支持 CNY")
         if route.stay_nights is not None or route.nonstop or route.travel_class != 1:

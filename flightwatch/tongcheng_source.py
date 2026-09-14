@@ -409,6 +409,10 @@ class TongchengProvider:
         return data
 
     def search(self, route: Route, today: date) -> SearchResult:
+        if route.origin_scope == "airport" or route.destination_scope == "airport":
+            raise ProviderUnsupported(
+                "同程当前公开数据只核实到城市，无法核实指定机场；本次未发起网络查询"
+            )
         if route.currency != "CNY":
             raise ProviderUnsupported("同程公开网页只提供 CNY 价格")
         if route.stay_nights is not None:

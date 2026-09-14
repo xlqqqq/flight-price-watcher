@@ -30,7 +30,7 @@
         <div class="workspace">
           <section class="panel settings-panel" aria-labelledby="settings-heading">
             <div class="panel-heading"><div><p class="section-kicker">YOUR TRIP</p><h2 id="settings-heading">设置我的行程</h2></div><span class="small-tag">成人 · 单程</span></div>
-            <form id="watch-form">
+            <form id="watch-form" novalidate>
               <fieldset id="form-fields" disabled>
                 <legend class="sr-only">行程及提醒设置</legend>
                 <div class="route-fields">
@@ -59,6 +59,16 @@
                 <h3 class="form-section-title">价格与提醒</h3>
                 <div class="field-group"><div class="field"><label for="mode">提醒条件</label><select id="mode" name="mode"><option value="both">最低价 + 低于目标价</option><option value="threshold">仅低于目标价</option><option value="lowest">最低价汇总</option></select></div><div class="field"><label for="threshold">目标价格 <span class="label-note">CNY</span></label><div class="price-input"><span aria-hidden="true">¥</span><input type="number" id="threshold" name="threshold" min="1" max="1000000" step="0.01" inputmode="decimal" placeholder="例如 800" required></div></div></div>
                 <p id="mode-hint" class="field-hint">价格严格低于目标价时提醒，并定期汇总最低价。</p>
+
+                <section class="trip-builder" aria-labelledby="trip-list-heading">
+                  <div class="trip-builder-top"><h3 id="trip-list-heading" class="form-section-title">行程清单</h3><span id="trip-count" class="count-tag">0 / 10</span></div>
+                  <button type="button" id="add-trip-button" class="button button-secondary">＋ 添加当前行程</button>
+                  <p id="trip-list-hint" class="field-hint">可添加多条独立行程；清单为空时仍按当前表单查询一条行程。</p>
+                  <ol id="trip-list" class="trip-list" aria-live="polite"></ol>
+                </section>
+
+                <div class="form-divider"></div>
+                <h3 class="form-section-title">统一监控与通知</h3>
                 <div class="field"><label for="interval">查询间隔</label><select id="interval" name="interval_minutes"><option value="10">每 10 分钟</option><option value="30">每 30 分钟</option><option value="60">每 1 小时</option><option value="180">每 3 小时</option><option value="360">每 6 小时</option><option value="720">每 12 小时</option><option value="1440">每天</option></select></div>
                 <div class="field"><label for="notify">接收提醒的方式</label><select id="notify" name="notify"><option value="wechat">微信文件传输助手 · 免 Token</option><option value="serverchan">微信服务号 · 免费 5 次/天</option><option value="browser">浏览器通知 · 免 Token</option></select></div>
                 <div class="channel-note" id="channel-note"><span id="channel-status" class="channel-status">正在检查通知环境…</span><p id="channel-description"></p><button type="button" id="test-wechat" class="text-button" disabled>发送微信测试消息 <span aria-hidden="true">↗</span></button></div>
@@ -96,20 +106,10 @@
             </section>
 
             <section class="panel results-panel" aria-labelledby="results-heading">
-              <div class="panel-heading"><div><p class="section-kicker">FARE COMPARISON</p><h2 id="results-heading">本次查询最低参考总价</h2></div><span id="result-badge" class="small-tag" role="status" aria-live="polite">等待查询</span></div>
-              <div id="source-summary" class="source-summary" hidden><h3 id="source-heading">各平台查询结果</h3><p id="comparison-scope" class="comparison-scope" role="status"></p><ul id="source-list" class="source-list"></ul><details id="additional-platforms" class="additional-platforms" hidden><summary id="additional-platforms-summary">更多平台核价入口</summary><p>这些平台会要求验证码或动态加载，暂不参与自动最低价；链接已带入本次路线与最早出发日期。</p><div id="additional-platform-links" class="additional-platform-links"></div></details></div>
+              <div class="panel-heading"><div><p class="section-kicker">FARE COMPARISON</p><h2 id="results-heading">各行程最低参考总价</h2></div><span id="result-badge" class="small-tag" role="status" aria-live="polite">等待查询</span></div>
               <div id="results-empty" class="empty-state"><div class="empty-symbol" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><rect x="12" y="16" width="40" height="36" rx="7" stroke="currentColor" stroke-width="2"/><path d="M12 27h40M23 12v9M41 12v9M22 37h6M36 37h6M22 44h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3 id="empty-title">好价格，从一段行程开始</h3><p id="empty-copy">选择出发地、目的地和可出发日期，<br>查询国内或国际航班的最低参考价。</p></div>
-              <div id="results-content" hidden>
-                <div id="best-fare" class="best-fare"><div><p id="fare-route" class="fare-route"></p><div class="fare-amount"><span class="currency-symbol">¥</span><strong id="best-price"></strong><span class="price-unit">起 / 人</span></div><p id="best-date" class="best-date"></p><p id="best-source" class="best-source"></p></div><div class="fare-meta"><span id="target-badge" class="target-badge" hidden></span><a id="best-link" class="fare-link" href="#" target="_blank" rel="noopener noreferrer" hidden>去核实价格 <span aria-hidden="true">↗</span></a></div></div>
-                <div id="no-comparable" class="notice no-comparable" hidden>本次暂无可比的含税参考总价。未含税或口径未确认的报价不会被选作最低价，请查看上方平台状态。</div>
-                <p id="price-note" class="price-note"></p>
-                <div id="daily-lowest-section"><div class="table-heading"><h3>每天最便宜的 App</h3><span id="query-time"></span></div>
-                  <p class="table-scroll-hint">左右滑动表格可查看 App 和跳转入口。</p>
-                  <div class="table-scroll"><table><caption class="sr-only">每个出发日期在所选平台中的最低含税参考总价、对应 App 和核价入口</caption><thead><tr><th scope="col">出发日期</th><th scope="col">当日最低参考总价</th><th scope="col">最便宜的 App</th><th scope="col" class="table-link-heading">跳转核价</th></tr></thead><tbody id="quote-rows"></tbody></table></div>
-                </div>
-              </div>
+              <div id="trip-results" class="trip-results" hidden></div>
               <div id="result-error" class="notice notice-error result-notice" role="alert" hidden></div>
-              <details id="result-warnings" class="result-warnings" hidden><summary id="result-warnings-summary">查看本次查询说明</summary><div id="result-warning-items"></div></details>
             </section>
 
             <section class="panel notifications-panel" aria-labelledby="notifications-heading">

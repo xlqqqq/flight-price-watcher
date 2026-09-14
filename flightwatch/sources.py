@@ -15,9 +15,15 @@ PROVIDERS = (
     {"id": "tongcheng", "name": "同程", "group": "国内旅行平台", "description": "国内航班含税参考价；国际 1 成人单程含税低价日历"},
     {"id": "qunar", "name": "去哪儿", "group": "国内旅行平台", "description": "国内/国际公开低价日历；国内未含税价单独展示"},
     {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "国内普通成人含税价；国际 1 成人单程含税低价日历"},
+    {"id": "trip", "name": "Trip.com", "group": "海外旅行平台", "description": "官网匿名逐日搜索，1 成人经济舱单程含税总价"},
+    {"id": "skyscanner", "name": "Skyscanner", "group": "海外旅行平台", "description": "官网匿名逐日完整搜索，核对含税价与供应商入口"},
     {"id": "google_flights", "name": "Google Flights", "group": "海外旅行平台", "description": "逐日搜索，1 成人经济舱单程含税参考价"},
     {"id": "kiwi", "name": "Kiwi.com", "group": "海外旅行平台", "description": "公开单程优惠，日期覆盖有限、票价口径未确认，仅供参考"},
+    {"id": "kayak", "name": "KAYAK", "group": "海外旅行平台", "description": "官网匿名指定日期搜索；动态结果不可核实时明确报错"},
+    {"id": "momondo", "name": "momondo", "group": "海外旅行平台", "description": "官网匿名指定日期搜索；动态结果不可核实时明确报错"},
     {"id": "ryanair", "name": "瑞安航空 Ryanair", "group": "航空公司官网", "description": "海外自营航线日历，外币折算并显示原价；税费未确认，仅供参考"},
+    {"id": "spring", "name": "春秋航空", "group": "航空公司官网", "description": "官网匿名逐日含税最低价；具体航班与经停需跳转核实"},
+    {"id": "airasia", "name": "AirAsia", "group": "航空公司官网", "description": "官网匿名逐日自营直飞价；税费口径未确认，仅展示"},
 )
 DEFAULT_SOURCES = tuple(item["id"] for item in PROVIDERS)
 NAMES = {item["id"]: item["name"] for item in PROVIDERS}
@@ -51,36 +57,33 @@ def platform_search_url(name: str, route: Route, day: date) -> str:
             "arrCity": destination, "arrCityName": _city_name(destination),
             "depDate": day.isoformat(),
         })
+    if name == "trip":
+        return "https://www.trip.com/flights/showfarefirst?" + urllib.parse.urlencode({
+            "dcity": origin.lower(), "acity": destination.lower(),
+            "ddate": day.isoformat(), "triptype": "ow", "class": "y",
+            "lowpricesource": "searchform",
+        })
+    if name == "skyscanner":
+        return (f"https://www.skyscanner.com.sg/transport/flights/{origin.lower()}/"
+                f"{destination.lower()}/{day:%y%m%d}/?" + urllib.parse.urlencode({
+                    "adultsv2": 1, "cabinclass": "economy", "rtn": 0,
+                    "currency": route.currency,
+                }))
+    if name == "kayak":
+        return f"https://www.kayak.com/flights/{origin}-{destination}/{day.isoformat()}?" + urllib.parse.urlencode({
+            "sort": "price_a", "currency": route.currency,
+        })
+    if name == "momondo":
+        return f"https://www.momondo.com/flight-search/{origin}-{destination}/{day.isoformat()}?" + urllib.parse.urlencode({
+            "sort": "price_a", "currency": route.currency,
+        })
+    if name == "spring":
+        from .spring_source import SpringAirlinesProvider
+        return SpringAirlinesProvider.official_url(route, day)
+    if name == "airasia":
+        from .airasia_source import AirAsiaProvider
+        return AirAsiaProvider.official_url(route, day)
     return ""
-
-
-def additional_platform_links(route: Route, day: date) -> list[dict[str, str]]:
-    """Exact-date official search links for sites that block unattended reads.
-
-    These are intentionally separate from price providers: opening a search is
-    useful, but it is not evidence that a price was returned to this program.
-    """
-    origin, destination = route.origin.upper(), route.destination.upper()
-    compact_day = day.strftime("%y%m%d")
-    encoded_pair = f"{origin}-{destination}"
-    return [
-        {"id": "trip", "name": "Trip.com", "url": "https://www.trip.com/flights/showfarefirst?" + urllib.parse.urlencode({
-            "dcity": origin.lower(), "acity": destination.lower(), "ddate": day.isoformat(),
-            "triptype": "ow", "class": "y", "lowpricesource": "searchform",
-        })},
-        {"id": "skyscanner", "name": "Skyscanner", "url": f"https://www.skyscanner.com/transport/flights/{origin.lower()}/{destination.lower()}/{compact_day}/?" + urllib.parse.urlencode({
-            "adultsv2": 1, "cabinclass": "economy", "rtn": 0,
-        })},
-        {"id": "kayak", "name": "KAYAK", "url": f"https://www.kayak.com/flights/{encoded_pair}/{day.isoformat()}?sort=bestflight_a"},
-        {"id": "momondo", "name": "momondo", "url": f"https://www.momondo.com/flight-search/{encoded_pair}/{day.isoformat()}?sort=bestflight_a"},
-        {"id": "spring", "name": "春秋航空", "url": f"https://flights.ch.com/{encoded_pair}.html?" + urllib.parse.urlencode({
-            "FDate": day.isoformat(), "MType": 0, "SType": 0,
-        })},
-        {"id": "airasia", "name": "AirAsia", "url": "https://www.airasia.com/flights/search/?" + urllib.parse.urlencode({
-            "origin": origin, "destination": destination, "departDate": day.isoformat(),
-            "tripType": "O", "adult": 1, "child": 0, "infant": 0,
-        })},
-    ]
 
 
 def estimate_requests(name, route, days):
@@ -94,6 +97,18 @@ def estimate_requests(name, route, days):
         return len({(day.year, day.month) for day in days})
     if name == "ctrip":
         return 1
+    if name == "trip":
+        return len(days)
+    if name == "skyscanner":
+        # One anonymous context page, then one search plus at most four
+        # bounded completion polls for each exact date.
+        return 1 + 5 * len(days)
+    if name == "spring":
+        return 1 + len(days)
+    if name == "airasia":
+        # Cold start: one route page, currently four candidate chunks, up to
+        # two exact-date reads (cached + live refresh), and one FX request.
+        return 0 if route.market == "domestic" else 6 + 2 * len(days)
     if name == "qunar":
         return 3
     if name == "kiwi":
@@ -130,15 +145,33 @@ def make_public_provider(name, timeout=30, request_delay=1.0, max_requests=60, *
     elif name == "fliggy":
         from .fliggy_source import FliggyProvider
         cls = FliggyProvider
+    elif name == "trip":
+        from .trip_source import TripComProvider
+        cls = TripComProvider
+    elif name == "skyscanner":
+        from .skyscanner_source import SkyscannerProvider
+        cls = SkyscannerProvider
     elif name == "google_flights":
         from .google_flights_source import GoogleFlightsProvider
         cls = GoogleFlightsProvider
     elif name == "kiwi":
         from .kiwi_source import KiwiDealsProvider
         cls = KiwiDealsProvider
+    elif name == "kayak":
+        from .kayak_source import KayakProvider
+        cls = KayakProvider
+    elif name == "momondo":
+        from .momondo_source import MomondoProvider
+        cls = MomondoProvider
     elif name == "ryanair":
         from .ryanair_source import RyanairProvider
         cls = RyanairProvider
+    elif name == "spring":
+        from .spring_source import SpringAirlinesProvider
+        cls = SpringAirlinesProvider
+    elif name == "airasia":
+        from .airasia_source import AirAsiaProvider
+        cls = AirAsiaProvider
     else:
         raise ConfigError("未知公开数据源")
     kwargs = {"cancelled": cancelled} if name != "ctrip" else {}

@@ -21,7 +21,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from .models import ProviderError, Quote, Route, SearchResult
+from .models import ProviderError, ProviderUnsupported, Quote, Route, SearchResult
 
 
 ENDPOINT = (
@@ -107,6 +107,10 @@ class CtripCalendarProvider:
         return data
 
     def search(self, route: Route, today: date) -> SearchResult:
+        if route.origin_scope == "airport" or route.destination_scope == "airport":
+            raise ProviderUnsupported(
+                "携程低价日历只回显城市，无法核实指定机场；本次未发起网络查询"
+            )
         if route.currency != "CNY":
             raise ProviderError("携程日历仅支持 CNY，不会将其他币种当作人民币")
         if route.stay_nights is not None:

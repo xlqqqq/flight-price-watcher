@@ -11,6 +11,7 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -180,6 +181,11 @@ class SerpApiProvider:
         last = flights[-1].get("arrival_airport")
         if not isinstance(first, dict) or not isinstance(last, dict):
             return None
+        if (not isinstance(first.get("id"), str)
+                or not re.fullmatch(r"[A-Z]{3}", first["id"])
+                or not isinstance(last.get("id"), str)
+                or not re.fullmatch(r"[A-Z]{3}", last["id"])):
+            return None
         raw_time = first.get("time")
         if not isinstance(raw_time, str):
             return None
@@ -213,6 +219,7 @@ class SerpApiProvider:
             price=price, currency=route.currency, source="SerpApi / Google Flights",
             airline=" / ".join(airlines), flight_number=" / ".join(numbers),
             stops=stops, url=url, price_note=note,
+            origin_airport=first["id"], destination_airport=last["id"],
         )
 
     @staticmethod

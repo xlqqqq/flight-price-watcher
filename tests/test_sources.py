@@ -5,10 +5,11 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from flightwatch.models import ConfigError, ProviderError, ProviderUnsupported, Quote, Route, SearchResult
-from flightwatch.sources import (MultiSourceProvider, additional_platform_links,
-                                 estimate_requests, normalize_sources, platform_search_url)
+from flightwatch.sources import (DEFAULT_SOURCES, MultiSourceProvider, estimate_requests,
+                                 normalize_sources, platform_search_url)
 
 
 DAY = date(2026, 10, 1)
@@ -74,14 +75,20 @@ class MultiSourceTests(unittest.TestCase):
         self.assertIn("arrCity=TYO", fliggy)
         self.assertIn("depDate=2026-10-01", fliggy)
 
-    def test_additional_platform_links_are_exact_date_https_searches(self):
-        links = additional_platform_links(
-            replace(self.route, origin="SHA", destination="TYO", market="international"), DAY)
-        self.assertEqual([item["name"] for item in links],
-                         ["Trip.com", "Skyscanner", "KAYAK", "momondo", "春秋航空", "AirAsia"])
-        self.assertTrue(all(item["url"].startswith("https://") for item in links))
-        self.assertTrue(all("2026-10-01" in item["url"] or "261001" in item["url"] for item in links))
-        self.assertTrue(all("SHA" in item["url"].upper() and "TYO" in item["url"].upper() for item in links))
+    def test_new_provider_links_are_exact_date_https_searches(self):
+        route = replace(self.route, origin="SHA", destination="TYO", market="international")
+        links = {name: platform_search_url(name, route, DAY) for name in (
+            "trip", "skyscanner", "kayak", "momondo", "spring", "airasia",
+        )}
+        self.assertTrue(all(link.startswith("https://") for link in links.values()))
+        self.assertTrue(all("SHA" in link.upper() and "TYO" in link.upper()
+                            for link in links.values()))
+        self.assertEqual(parse_qs(urlsplit(links["trip"]).query)["ddate"], ["2026-10-01"])
+        self.assertIn("/261001/", urlsplit(links["skyscanner"]).path)
+        self.assertIn("/2026-10-01", urlsplit(links["kayak"]).path)
+        self.assertIn("/2026-10-01", urlsplit(links["momondo"]).path)
+        self.assertEqual(parse_qs(urlsplit(links["spring"]).query)["FDate"], ["2026-10-01"])
+        self.assertEqual(parse_qs(urlsplit(links["airasia"]).query)["departDate"], ["01/10/2026"])
 
     def test_wrong_city_and_currency_never_enter_comparison(self):
         self.b.search.return_value = SearchResult([
@@ -148,7 +155,7 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual([s["status"] for s in result.sources], ["ok", "ok"])
 
     def test_all_selected_platforms_start_without_four_source_queue(self):
-        names = ("ctrip", "tongcheng", "qunar", "fliggy", "google_flights")
+        names = DEFAULT_SOURCES
         barrier = threading.Barrier(len(names), timeout=3)
         providers = {}
         for name in names:
@@ -167,9 +174,18 @@ class MultiSourceTests(unittest.TestCase):
         days = [date(2026, 10, 1), date(2026, 10, 31), date(2026, 11, 1)]
         self.assertEqual(estimate_requests("tongcheng", route, days), 1)
         self.assertEqual(estimate_requests("fliggy", route, days), 2)
+        self.assertEqual(estimate_requests("trip", route, days), 3)
+        self.assertEqual(estimate_requests("skyscanner", route, days), 16)
+        self.assertEqual(estimate_requests("spring", route, days), 4)
+        self.assertEqual(estimate_requests("airasia", route, days), 12)
+        self.assertEqual(estimate_requests("airasia", replace(route, market="domestic"), days), 0)
 
     def test_source_order_canonicalized_and_changes_reset_alert_state(self):
         self.assertEqual(normalize_sources(["tongcheng", "ctrip"]), ("ctrip", "tongcheng"))
+        self.assertEqual(
+            normalize_sources(["airasia", "trip", "spring", "kayak"]),
+            ("trip", "kayak", "spring", "airasia"),
+        )
         self.assertNotEqual(self.route.state_key(), replace(self.route, sources=("ctrip",)).state_key())
         for value in ([], ["fake"], ["ctrip", "ctrip"], "ctrip", [1]):
             with self.subTest(value=value), self.assertRaises(ConfigError):

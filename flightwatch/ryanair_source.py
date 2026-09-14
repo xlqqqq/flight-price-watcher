@@ -59,7 +59,7 @@ class RyanairProvider:
         except (UnicodeDecodeError, ValueError, RecursionError):
             raise ProviderError("瑞安航空/汇率返回无效 JSON 或验证页") from None
 
-    def _city_airports(self, code):
+    def _city_airports(self, code, *, scope="city", city_code=""):
         if self._airports is None:
             rows = self._request(AIRPORTS)
             if not isinstance(rows, list) or not 1 <= len(rows) <= 2000:
@@ -68,13 +68,34 @@ class RyanairProvider:
                    or not re.fullmatch(r"[A-Z]{3}", str(row.get("code", ""))) for row in rows):
                 raise ProviderError("瑞安航空机场代码/城市字段无效")
             self._airports = rows
-        # macCode is the airline's own metropolitan IATA identity. Do not
-        # choose airports using nearest coordinates or a fixed popular list.
-        grouped = [r for r in self._airports if r["city"].get("macCode") == code]
-        selected = grouped or [r for r in self._airports if r["code"] == code]
+        # macCode is the airline's own metropolitan IATA identity. Airport
+        # scope must never expand through a coincidentally equal macCode.
+        if scope == "airport":
+            selected = [r for r in self._airports if r["code"] == code]
+            if len(selected) == 1 and city_code:
+                returned_city = selected[0]["city"].get("macCode")
+                if returned_city and returned_city != city_code:
+                    raise ProviderUnsupported(
+                        f"瑞安航空目录显示机场 {code} 不属于所选城市 {city_code}"
+                    )
+        elif scope == "city":
+            grouped = [r for r in self._airports if r["city"].get("macCode") == code]
+            selected = grouped or [r for r in self._airports if r["code"] == code]
+        else:
+            raise ProviderUnsupported("瑞安航空地点范围必须是城市全部机场或具体机场")
         if not selected:
-            raise ProviderUnsupported(f"瑞安航空目录未覆盖城市 {code}；不会改查附近城市")
+            kind = "机场" if scope == "airport" else "城市"
+            raise ProviderUnsupported(f"瑞安航空目录未覆盖{kind} {code}；不会改查附近机场")
         return sorted({r["code"] for r in selected})
+
+    def _route_airports(self, route: Route, side: str):
+        scope = getattr(route, f"{side}_scope")
+        code = getattr(route, side)
+        city_code = route.city_code(side)
+        if scope == "airport" and (
+                not isinstance(city_code, str) or not re.fullmatch(r"[A-Z]{3}", city_code)):
+            raise ProviderUnsupported(f"瑞安航空机场 {code} 缺少有效所属城市代码")
+        return self._city_airports(code, scope=scope, city_code=city_code)
 
     def search(self, route: Route, today: date):
         if route.currency != "CNY" or route.stay_nights or route.nonstop or route.travel_class != 1:
@@ -86,7 +107,8 @@ class RyanairProvider:
         wanted = set(route.departure_dates(today))
         if not wanted:
             return SearchResult([], ["没有尚未过期的出发日期"])
-        origins, destinations = self._city_airports(route.origin), self._city_airports(route.destination)
+        origins = self._route_airports(route, "origin")
+        destinations = self._route_airports(route, "destination")
         pairs = [(a, b) for a, b in product(origins, destinations) if a != b]
         if not pairs:
             raise ProviderUnsupported("瑞安航空的出发与到达机场集合重叠")
@@ -153,6 +175,7 @@ class RyanairProvider:
             quotes.append(Quote(route.origin, route.destination, day, total, "CNY", "瑞安航空官网日历",
                 airline="Ryanair", provider="ryanair", price_basis="unknown",
                 original_price=price, original_currency=currency, exchange_rate=rate, exchange_date=rate_day,
+                origin_airport=origin, destination_airport=destination,
                 url="https://www.ryanair.com/gb/en/trip/flights/select?" + query,
                 price_note=f"瑞安航空 {origin}→{destination}，1 成人单程参考票价；原价 {currency} {price}，"
                            f"按 {rate_day} Frankfurter 参考汇率 1 {currency}={rate} CNY 折算；"

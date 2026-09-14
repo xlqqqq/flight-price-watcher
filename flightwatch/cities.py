@@ -19,7 +19,9 @@ TNA-CGO booking pages and international/Schedule/nkg-lhw.html. These codes
 select a city in Ctrip; they do not promise a particular departure airport.
 ``market`` selects the calendar service, not political geography: Hong Kong,
 Macao and Taipei use the international/China regional service and country=中国.
-This is a finite starter catalogue. Unknown input is never guessed.
+This is a finite starter catalogue. Unknown input is never guessed.  Place
+records deliberately distinguish a city (all airports) from one airport.  A
+country is display/filter metadata only and is never a queryable place.
 """
 
 from __future__ import annotations
@@ -87,11 +89,60 @@ _INTERNATIONAL = (
     ("多伦多", "YTO", "加拿大"),
 )
 
+_COUNTRY_CODES = {
+    "中国": "CN", "日本": "JP", "韩国": "KR", "泰国": "TH", "新加坡": "SG",
+    "马来西亚": "MY", "印度尼西亚": "ID", "越南": "VN", "阿联酋": "AE",
+    "英国": "GB", "法国": "FR", "美国": "US", "澳大利亚": "AU", "加拿大": "CA",
+    "捷克": "CZ", "摩洛哥": "MA",
+}
+
+
+def country_code_for(country: str) -> str:
+    """Return a verified ISO alpha-2 code, or an empty value when unknown."""
+    if not isinstance(country, str):
+        return ""
+    return _COUNTRY_CODES.get(unicodedata.normalize("NFKC", country).strip(), "")
+
+
+def city_place(name: str, code: str, country: str, market: str) -> dict[str, str]:
+    """Build the common, backwards-compatible place record for a whole city."""
+    return {
+        "scope": "city",
+        "country": country,
+        "country_code": country_code_for(country),
+        "city_name": name,
+        "city_code": code,
+        "iata": code,
+        "name": name,
+        "code": code,
+        "market": market,
+        "label": f"{name}（{code} · 全部机场）",
+    }
+
+
+def airport_place(name: str, code: str, city_name: str, city_code: str,
+                  country: str, market: str) -> dict[str, str]:
+    """Build a selectable airport record while retaining its owning city."""
+    return {
+        "scope": "airport",
+        "country": country,
+        "country_code": country_code_for(country),
+        "city_name": city_name,
+        "city_code": city_code,
+        "airport_name": name,
+        "airport_code": code,
+        "iata": code,
+        "name": name,
+        "code": code,
+        "market": market,
+        "label": f"{city_name} · {name}（{code}）",
+    }
+
+
 CITIES: list[dict[str, str]] = [
-    {"name": name, "code": code, "country": "中国", "market": "domestic"}
-    for name, code in _DOMESTIC
+    city_place(name, code, "中国", "domestic") for name, code in _DOMESTIC
 ] + [
-    {"name": name, "code": code, "country": country, "market": "international"}
+    city_place(name, code, country, "international")
     for name, code, country in _INTERNATIONAL
 ]
 
@@ -124,6 +175,9 @@ def resolve_city(value: str) -> dict[str, str] | None:
     city = _BY_NAME.get(name) or _BY_CODE.get(text.upper())
     if city:
         return dict(city)
+    for candidate in CITIES:
+        if text == unicodedata.normalize("NFKC", candidate["label"]):
+            return dict(candidate)
     match = re.fullmatch(r"(.+?)\s+([A-Za-z]{3})", text)
     if not match:
         match = re.fullmatch(r"(.+?)\s*\(([A-Za-z]{3})\)", text)

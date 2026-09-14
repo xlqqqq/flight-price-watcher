@@ -4,12 +4,10 @@ Primary endpoint verified on 2026-09-08:
 https://m.ctrip.com/restapi/soa2/19691/airportFuzzySearch
 Public flight UI: https://m.ctrip.com/html5/flight/
 
-Read-only live checks returned 喀什/kashi -> KHG, 阿勒泰 -> AAT,
-布拉格 -> PRG (捷克), chengdu -> CTU (with CTU/TFU airports), 东京 -> TYO,
-haikou -> HAK, 景洪 -> JHG, and airport query PVG -> city SHA. The service
-returns a JSON-string ``data`` array with CITY, AIRPORT, NEAR_CITY and other
-POIs. We expose CITY and AIRPORT's owning city only, never numeric CityID,
-nearby-city substitutions, attractions or individual-airport codes.
+Read-only live checks returned a CITY row with its zero-distance ``airports``
+children for 上海 and 伦敦, and an exact AIRPORT row for query PVG.  We expose
+both the owning city (all airports) and verified individual airports. COUNTRY,
+nearby-city, attraction and other POI rows are never selectable.
 
 This is an undocumented public website backend. An HTTP success is not enough:
 both JSON layers and the service acknowledgement must be valid. Failures are
@@ -29,6 +27,7 @@ import urllib.error
 import urllib.request
 
 from .models import ProviderError
+from .cities import airport_place, city_place
 
 
 ENDPOINT = "https://m.ctrip.com/restapi/soa2/19691/airportFuzzySearch"
@@ -42,6 +41,7 @@ MAX_RESULTS = 50
 
 _QUERY_CACHE: OrderedDict[str, tuple[float, list[dict[str, str]]]] = OrderedDict()
 _CITY_CACHE: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()
+_AIRPORT_CACHE: OrderedDict[str, tuple[float, dict[str, str]]] = OrderedDict()
 _CACHE_LOCK = threading.RLock()
 _REQUEST_LOCK = threading.Lock()
 _LAST_REQUEST = 0.0
@@ -86,6 +86,26 @@ def cached_city(code: str) -> dict[str, str] | None:
         return dict(item[1])
 
 
+def cached_place(code: str, scope: str = "city", city_code: str | None = None) -> dict[str, str] | None:
+    """Return a previously verified city or airport without network access."""
+    if not isinstance(code, str) or scope not in {"city", "airport"}:
+        return None
+    key = code.strip().upper()
+    cache = _CITY_CACHE if scope == "city" else _AIRPORT_CACHE
+    with _CACHE_LOCK:
+        item = cache.get(key)
+        if item is None:
+            return None
+        if time.monotonic() - item[0] >= CACHE_TTL:
+            del cache[key]
+            return None
+        place = item[1]
+        if city_code is not None and place.get("city_code") != city_code.strip().upper():
+            return None
+        cache.move_to_end(key)
+        return dict(place)
+
+
 def _remember(key: str, cities: list[dict[str, str]]) -> None:
     stamp = time.monotonic()
     with _CACHE_LOCK:
@@ -94,10 +114,13 @@ def _remember(key: str, cities: list[dict[str, str]]) -> None:
         while len(_QUERY_CACHE) > MAX_QUERY_CACHE:
             _QUERY_CACHE.popitem(last=False)
         for city in cities:
-            _CITY_CACHE[city["code"]] = (stamp, dict(city))
-            _CITY_CACHE.move_to_end(city["code"])
+            cache = _CITY_CACHE if city.get("scope", "city") == "city" else _AIRPORT_CACHE
+            cache[city["code"]] = (stamp, dict(city))
+            cache.move_to_end(city["code"])
         while len(_CITY_CACHE) > MAX_CITY_CACHE:
             _CITY_CACHE.popitem(last=False)
+        while len(_AIRPORT_CACHE) > MAX_CITY_CACHE:
+            _AIRPORT_CACHE.popitem(last=False)
 
 
 def _request(query: str) -> dict:
@@ -129,6 +152,57 @@ def _request(query: str) -> dict:
     return value
 
 
+def _country(row: dict) -> str:
+    names = row.get("names")
+    if isinstance(names, list) and len(names) >= 2 and isinstance(names[-2], str):
+        return names[-2].strip()
+    return ""
+
+
+def _clean_city_name(row: dict) -> str:
+    names = row.get("names")
+    if isinstance(names, list) and names and isinstance(names[0], str) and names[0].strip():
+        return names[0].strip()
+    value = row.get("cityName")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _validated_city(row: dict) -> dict[str, str] | None:
+    if row.get("cityCodeType") != "CityCode":
+        return None
+    code, name, international = row.get("cityCode"), _clean_city_name(row), row.get("isIntl")
+    if not isinstance(code, str) or not isinstance(international, bool):
+        raise ProviderError("城市搜索缺少城市名称、代码或国内国际分类")
+    code = code.upper().strip()
+    if not re.fullmatch(r"[A-Z]{3}", code):
+        return None
+    if not name or len(name) > 120:
+        raise ProviderError("城市搜索返回无效城市名")
+    return city_place(name, code, _country(row), "international" if international else "domestic")
+
+
+def _validated_airport(row: dict, city: dict[str, str], *, child: bool = False) -> dict[str, str] | None:
+    code, name = row.get("airportCode"), row.get("airportName")
+    owner, international = row.get("cityCode"), row.get("isIntl")
+    if child and row.get("distance") != 0:
+        return None
+    if not isinstance(code, str) or not isinstance(name, str) or not isinstance(owner, str):
+        if child:
+            return None
+        raise ProviderError("机场搜索缺少机场名称、代码或所属城市")
+    code, owner = code.upper().strip(), owner.upper().strip()
+    if not re.fullmatch(r"[A-Z]{3}", code) or owner != city["city_code"]:
+        return None
+    if not name.strip() or len(name) > 120:
+        raise ProviderError("机场搜索返回无效机场名")
+    if not isinstance(international, bool) or international != (city["market"] == "international"):
+        if child:
+            return None
+        raise ProviderError("机场搜索的国内国际分类与所属城市不一致")
+    return airport_place(name.strip(), code, city["city_name"], city["city_code"],
+                         city["country"], city["market"])
+
+
 def _parse(payload: dict) -> list[dict[str, str]]:
     if not isinstance(payload, dict):
         raise ProviderError("城市搜索返回结构已变化")
@@ -146,32 +220,34 @@ def _parse(payload: dict) -> list[dict[str, str]]:
         raise ProviderError("城市搜索结果不是列表，接口可能已变化")
     if any(not isinstance(row, dict) for row in rows):
         raise ProviderError("城市搜索结果字段已变化")
-    found: dict[str, dict[str, str]] = {}
-    # CITY metadata is preferred to duplicate airport entries even when the
-    # upstream result order starts with an airport (e.g. an airport-code query).
-    ordered = [row for row in rows if row.get("poiType") == "CITY"]
-    ordered.extend(row for row in rows if row.get("poiType") == "AIRPORT")
-    for row in ordered:
+    found: dict[tuple[str, str, str], dict[str, str]] = {}
+
+    def add(place: dict[str, str] | None) -> None:
+        if place is None or len(found) >= MAX_RESULTS:
+            return
+        identity = (place["scope"], place["code"], place["city_code"])
+        found.setdefault(identity, place)
+
+    for row in rows:
+        kind = row.get("poiType")
+        if kind not in {"CITY", "AIRPORT"}:
+            continue  # Countries are headings only; other POIs cannot become routes.
         if "cityCodeType" not in row:
             raise ProviderError("城市搜索缺少城市代码类型，停止解析以避免误选机场")
-        if row["cityCodeType"] != "CityCode":
+        city = _validated_city(row)
+        if city is None:
             continue
-        code, name, international = row.get("cityCode"), row.get("cityName"), row.get("isIntl")
-        if not isinstance(code, str) or not isinstance(name, str) or not isinstance(international, bool):
-            raise ProviderError("城市搜索缺少城市名称、代码或国内国际分类")
-        code = code.upper().strip()
-        if not re.fullmatch(r"[A-Z]{3}", code):
-            continue  # The current calendar accepts three-letter flight city codes.
-        if not name.strip() or len(name) > 120:
-            raise ProviderError("城市搜索返回无效城市名")
-        names = row.get("names")
-        country = ""
-        # Verified CITY names=[city, country, code] and AIRPORT names=[city,
-        # airport, country, code], with occasional null province before country.
-        if isinstance(names, list) and len(names) >= 2 and isinstance(names[-2], str):
-            country = names[-2].strip()
-        found.setdefault(code, {"name": name.strip(), "code": code, "country": country,
-                                "market": "international" if international else "domestic"})
+        add(city)
+        if kind == "CITY":
+            children = row.get("airports", [])
+            if children is not None and not isinstance(children, list):
+                raise ProviderError("城市搜索的机场列表结构已变化")
+            for child in children or []:
+                if not isinstance(child, dict):
+                    raise ProviderError("城市搜索的机场列表结构已变化")
+                add(_validated_airport(child, city, child=True))
+        else:
+            add(_validated_airport(row, city))
         if len(found) >= MAX_RESULTS:
             break
     return list(found.values())

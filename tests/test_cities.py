@@ -38,7 +38,16 @@ class CityLookupTests(unittest.TestCase):
         self.assertGreaterEqual(sum(city["market"] == "domestic" for city in CITIES), 25)
         self.assertGreaterEqual(sum(city["market"] == "international" for city in CITIES), 20)
         self.assertEqual(len({city["code"] for city in CITIES}), len(CITIES))
-        self.assertTrue(all(set(city) == {"name", "code", "country", "market"} for city in CITIES))
+        required = {"scope", "country", "country_code", "city_name", "city_code",
+                    "iata", "name", "code", "market", "label"}
+        self.assertTrue(all(required <= set(city) for city in CITIES))
+        self.assertTrue(all(city["scope"] == "city" and city["city_code"] == city["code"]
+                            and "全部机场" in city["label"] for city in CITIES))
+
+    def test_new_city_label_resolves_without_losing_scope(self):
+        city = resolve_city("上海（SHA · 全部机场）")
+        self.assertEqual((city["scope"], city["city_code"], city["country_code"]),
+                         ("city", "SHA", "CN"))
 
     def test_lookup_returns_copy(self):
         result = resolve_city("上海")

@@ -81,6 +81,19 @@ class _CalendarServiceRejected(ProviderError):
     """The endpoint explicitly declined this calendar shape, not bad data."""
 
 
+def _city_query_code(route: Route, side: str) -> str:
+    scope = getattr(route, f"{side}_scope")
+    selected = getattr(route, side)
+    if scope == "city":
+        return selected
+    if scope == "airport":
+        city = route.city_code(side)
+        if not isinstance(city, str) or not re.fullmatch(r"[A-Z]{3}", city):
+            raise ProviderUnsupported(f"飞猪指定机场 {selected} 缺少有效所属城市代码")
+        return city
+    raise ProviderUnsupported("飞猪地点范围必须是城市全部机场或具体机场")
+
+
 def parse_jsonp(text: str) -> dict:
     """Parse the documented callback as JSON data; reject extra executable text."""
     match = re.fullmatch(r"\s*flightwatch\((.*)\)\s*;?\s*", text, re.DOTALL)
@@ -131,7 +144,8 @@ class FliggyProvider:
                 if route.market == "international"
                 else "https://sjipiao.fliggy.com/flight_search_result.htm")
         return root + "?" + urllib.parse.urlencode({
-            "tripType": "0", "depCity": route.origin, "arrCity": route.destination,
+            "tripType": "0", "depCity": _city_query_code(route, "origin"),
+            "arrCity": _city_query_code(route, "destination"),
             "depDate": day.isoformat(),
         })
 
@@ -169,12 +183,14 @@ class FliggyProvider:
             raise ProviderError("飞猪返回无法识别的文本，可能是验证页") from None
 
     def _request(self, route: Route, day: date) -> dict:
+        origin = _city_query_code(route, "origin")
+        destination = _city_query_code(route, "destination")
         self._before_request()
         # These are the official search page's anonymous defaults. Conditions
         # in returned offers are still checked; member prices are not alerts.
         params = {
-            "tripType": "0", "depCity": route.origin, "depCityName": "",
-            "arrCity": route.destination, "arrCityName": "", "depDate": day.isoformat(),
+            "tripType": "0", "depCity": origin, "depCityName": "",
+            "arrCity": destination, "arrCityName": "", "depDate": day.isoformat(),
             "searchSource": "99", "sKey": "", "qid": "", "needMemberPrice": "true",
             "_input_charset": "utf-8", "ua": "", "itemId": "", "openCb": "false",
             "callback": _CALLBACK,
@@ -182,7 +198,7 @@ class FliggyProvider:
         request = urllib.request.Request(ENDPOINT + "?" + urllib.parse.urlencode(params), headers={
             "User-Agent": _USER_AGENT,
             "Referer": "https://sjipiao.fliggy.com/homeow/trip_flight_search.htm?" + urllib.parse.urlencode({
-                "depCity": route.origin, "arrCity": route.destination,
+                "depCity": origin, "arrCity": destination,
                 "depDate": day.isoformat(), "tripType": "0",
             }),
         })
@@ -225,8 +241,17 @@ class FliggyProvider:
             raise ProviderUnsupported("飞猪公开航班数据源目前只比较普通经济舱")
         if route.nonstop:
             raise ProviderUnsupported("飞猪公开航班数据源目前不支持直飞筛选")
-        if not all(re.fullmatch(r"[A-Z]{3}", code) for code in (route.origin, route.destination)):
-            raise ProviderError("飞猪查询须使用三字母城市代码")
+        if not all(isinstance(code, str) and re.fullmatch(r"[A-Z]{3}", code)
+                   for code in (route.origin, route.destination)):
+            raise ProviderError("飞猪查询须使用三字母城市或机场代码")
+        if route.market == "international" and (
+                route.origin_scope == "airport" or route.destination_scope == "airport"):
+            raise ProviderUnsupported(
+                "飞猪国际最低价日历不返回实际机场，无法核实指定机场；本次未发起网络查询"
+            )
+        # Validate scope and required owning-city metadata before any request.
+        _city_query_code(route, "origin")
+        _city_query_code(route, "destination")
         dates = route.departure_dates(today)
         if not dates:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
@@ -433,12 +458,14 @@ class FliggyProvider:
         data = response.get("data")
         if not isinstance(data, dict):
             raise ProviderError("飞猪响应缺少航班数据，可能需要验证或接口已变化")
-        if data.get("depCityCode") != route.origin or data.get("arrCityCode") != route.destination:
+        origin_city = _city_query_code(route, "origin")
+        destination_city = _city_query_code(route, "destination")
+        if data.get("depCityCode") != origin_city or data.get("arrCityCode") != destination_city:
             raise ProviderError("飞猪响应城市与所选城市不一致")
         rows, airlines = data.get("flight"), data.get("aircodeNameMap")
         if not isinstance(rows, list) or not isinstance(airlines, dict):
             raise ProviderError("飞猪航班列表或航空公司字段发生变化")
-        candidates, restricted, connections = [], 0, 0
+        candidates, restricted, connections, airport_mismatches = [], 0, 0, 0
         for row in rows:
             if not isinstance(row, dict):
                 raise ProviderError("飞猪航班字段发生变化")
@@ -476,8 +503,19 @@ class FliggyProvider:
                 raise ProviderError("飞猪经停次数无效")
             flight_number = row.get("flightNo")
             airline_code = row.get("airlineCode")
+            origin_airport = row.get("depAirport")
+            destination_airport = row.get("arrAirport")
             if not isinstance(flight_number, str) or not flight_number or not isinstance(airline_code, str):
                 raise ProviderError("飞猪航班号或航空公司字段发生变化")
+            if (not isinstance(origin_airport, str) or not re.fullmatch(r"[A-Z]{3}", origin_airport)
+                    or not isinstance(destination_airport, str)
+                    or not re.fullmatch(r"[A-Z]{3}", destination_airport)):
+                raise ProviderError("飞猪实际起降机场字段发生变化")
+            if ((route.origin_scope == "airport" and origin_airport != route.origin)
+                    or (route.destination_scope == "airport"
+                        and destination_airport != route.destination)):
+                airport_mismatches += 1
+                continue
             airline = airlines.get(airline_code, airline_code)
             if not isinstance(airline, str):
                 raise ProviderError("飞猪航空公司名称格式发生变化")
@@ -486,6 +524,7 @@ class FliggyProvider:
                 price=fare + oil + build, currency="CNY", source="飞猪公开航班搜索",
                 airline=airline, flight_number=flight_number, stops=int(stop),
                 url=self._booking_url(route, day), provider="fliggy", price_basis="total",
+                origin_airport=origin_airport, destination_airport=destination_airport,
                 price_note=(f"飞猪返回普通成人单程经济舱参考价：票价 {fare} + 税费 {oil + build} 元；"
                             "已排除返回数据注明的限年龄、会员及特殊产品，未查询中转报价；"
                             "行李及最终可售价格请到购票页确认"),
@@ -495,6 +534,10 @@ class FliggyProvider:
             warnings.append(f"{day} 飞猪已排除 {restricted} 条附预订限制、非经济舱或特殊产品报价")
         if connections:
             warnings.append(f"{day} 飞猪 {connections} 条中转组合未参与比较，当前仅核实单航班税费")
+        if airport_mismatches:
+            warnings.append(
+                f"{day} 飞猪已排除 {airport_mismatches} 条实际起降机场与所选机场不一致的报价"
+            )
         if not candidates:
             warnings.append(f"{day} 飞猪暂无可确认的普通成人含税报价，不能据此判断售罄")
         return SearchResult([min(candidates, key=lambda quote: quote.price)] if candidates else [], warnings)

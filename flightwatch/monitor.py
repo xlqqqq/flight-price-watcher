@@ -29,10 +29,12 @@ def format_quote(route: Route, quote: Quote, kinds: list[str], previous: Decimal
         lines.append(f"此前本脚本观察到的最低价：{quote.currency} {previous:.2f}")
     if quote.airline or quote.flight_number:
         lines.append(f"航司/航班：{quote.airline} {quote.flight_number}".strip())
+    if quote.origin_airport and quote.destination_airport:
+        lines.append(f"实际起降机场：{quote.origin_airport} → {quote.destination_airport}")
     lines.append(f"中转次数：{quote.stops}" if quote.stops is not None else "直飞/中转请在购票页确认")
     lines.extend([f"来源：{quote.source}", quote.price_note])
     if quote.url:
-        lines.append(f"核价入口：{quote.url}")
+        lines.append(f"按本行程继续购买：{quote.url}")
     if partial:
         lines.append("部分平台或日期未获得可比报价，本次价格不代表完整日期窗口的最低价。")
     return "\n".join(lines)

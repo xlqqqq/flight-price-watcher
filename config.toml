@@ -1,8 +1,9 @@
 # 默认是示例航线，不代表你的实际出行计划；修改本文件即可调整。
 # 网页可自由选择城市/日期；本文件供命令行使用。
 # 多平台使用城市代码：SHA 上海、BJS 北京、CAN 广州、TYO 东京、SIN 新加坡。
-# sources 可选 ctrip / tongcheng / qunar / fliggy / google_flights / kiwi / ryanair。
-# 不填时查询全部；其中 Kiwi 和瑞安仅展示参考价，不参与总价提醒。
+# sources 可选 ctrip / tongcheng / qunar / fliggy / trip / skyscanner /
+# google_flights / kiwi / kayak / momondo / ryanair / spring / airasia。
+# 不填时查询全部；其中 Kiwi、瑞安和 AirAsia 的口径未确认，仅展示参考价。
 [monitor]
 timezone = "Asia/Shanghai"
 interval_minutes = 360          # 每 6 小时查询；最低 10 分钟
@@ -11,7 +12,7 @@ repeat_hours = 24               # 低于阈值但未继续降价，24 小时后�
 min_drop = 1                   # 距上次阈值提醒再降至少 1 元，提前再次提醒
 timeout_seconds = 30
 request_delay_seconds = 1.0
-max_requests_per_cycle = 60     # 每个数据源每轮请求上限
+max_requests_per_cycle = 320    # 每个数据源每轮请求上限；覆盖示例四航线的逐日查询
 database = "data/prices.sqlite3"
 
 [[routes]]

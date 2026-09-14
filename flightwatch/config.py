@@ -109,6 +109,8 @@ def load_config(path: Path) -> Settings:
             "id", "name", "origin", "destination", "provider", "currency", "mode",
             "threshold", "dates", "start_offset_days", "end_offset_days", "stay_nights",
             "nonstop", "travel_class", "market", "sources",
+            "origin_scope", "destination_scope", "origin_city_code", "destination_city_code",
+            "origin_label", "destination_label",
         }, "routes")
         rid = item.get("id", "")
         if not isinstance(rid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid) or rid in ids:
@@ -122,6 +124,25 @@ def load_config(path: Path) -> Settings:
             codes.append(code.upper())
         if set(codes[0].split(",")) & set(codes[1].split(",")):
             raise ConfigError(f"{rid} 的出发和到达机场不能重叠")
+        locations = []
+        for field, code in zip(("origin", "destination"), codes):
+            scope = item.get(f"{field}_scope", "city")
+            if scope not in {"city", "airport"}:
+                raise ConfigError(f"{rid}.{field}_scope 仅支持 city 或 airport")
+            city_code = item.get(f"{field}_city_code", code if scope == "city" and "," not in code else "")
+            if not isinstance(city_code, str) or (city_code and not re.fullmatch(r"[A-Za-z]{3}", city_code)):
+                raise ConfigError(f"{rid}.{field}_city_code 应为所属城市三字码")
+            city_code = city_code.upper()
+            if scope == "city" and "," not in code and city_code != code:
+                raise ConfigError(f"{rid}.{field} 为城市范围时必须与 {field}_city_code 一致")
+            if scope == "airport" and ("," in code or not city_code):
+                raise ConfigError(f"{rid}.{field} 为机场范围时必须提供单个机场码和所属城市码")
+            label = item.get(f"{field}_label", "")
+            if not isinstance(label, str) or len(label) > 160 or any(ord(ch) < 32 for ch in label):
+                raise ConfigError(f"{rid}.{field}_label 必须是最多 160 字的安全地点名称")
+            locations.append((scope, city_code, label.strip()))
+        if locations[0][1] and locations[0][1] == locations[1][1]:
+            raise ConfigError(f"{rid} 的出发和到达地点不能属于同一城市")
         from .sources import DEFAULT_SOURCES, NAMES, normalize_sources
         provider = item.get("provider", "multi")
         if provider not in {*NAMES, "multi", "serpapi"}:
@@ -165,9 +186,15 @@ def load_config(path: Path) -> Settings:
         if provider != "serpapi" and (currency != "CNY" or nights or nonstop or travel_class != 1
                                      or any("," in code for code in codes)):
             raise ConfigError(f"{rid} 公开来源仅支持 CNY、单程、默认舱位、单个城市代码，且不能筛选直飞")
-        routes.append(Route(rid, name, *codes, provider, currency, mode, threshold,
-                            dates, start, end, nights, nonstop,
-                            travel_class, market, sources))
+        routes.append(Route(
+            id=rid, name=name, origin=codes[0], destination=codes[1], provider=provider,
+            currency=currency, mode=mode, threshold=threshold, dates=dates,
+            start_offset_days=start, end_offset_days=end, stay_nights=nights,
+            nonstop=nonstop, travel_class=travel_class, market=market, sources=sources,
+            origin_scope=locations[0][0], destination_scope=locations[1][0],
+            origin_city_code=locations[0][1], destination_city_code=locations[1][1],
+            origin_label=locations[0][2], destination_label=locations[1][2],
+        ))
     database = monitor.get("database", "data/prices.sqlite3")
     if not isinstance(database, str) or not database:
         raise ConfigError("database 应为文件路径")
@@ -179,6 +206,6 @@ def load_config(path: Path) -> Settings:
         money(monitor.get("min_drop", 1), "min_drop"),
         integer(monitor.get("timeout_seconds", 30), "timeout_seconds", 3, 120),
         float(delay),
-        integer(monitor.get("max_requests_per_cycle", 60), "max_requests_per_cycle", 1, 1000),
+        integer(monitor.get("max_requests_per_cycle", 320), "max_requests_per_cycle", 1, 1000),
         (path.parent / database).resolve(),
     )

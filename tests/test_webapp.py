@@ -88,15 +88,18 @@ class WebAppTests(unittest.TestCase):
         self.assertTrue(self.app.latest["error"])
         self.assertFalse(self.app.notifications)
 
-    def test_query_exposes_additional_exact_date_platform_links(self):
+    def test_web_query_passes_full_31_day_provider_budget(self):
         with patch("flightwatch.webapp.MultiSourceProvider") as provider:
             provider.return_value.search.return_value = self.prices()
             self.query()
-        links = self.app.latest["additional_platforms"]
-        self.assertEqual(len(links), 6)
-        self.assertTrue(all(self.input["start_date"] in item["url"]
-                            or date.fromisoformat(self.input["start_date"]).strftime("%y%m%d") in item["url"]
-                            for item in links))
+        self.assertEqual(provider.call_args.kwargs["max_requests"], 160)
+        self.assertEqual(provider.call_args.kwargs["request_delay"], 1.0)
+
+    def test_query_no_longer_exposes_separate_link_only_platforms(self):
+        with patch("flightwatch.webapp.MultiSourceProvider") as provider:
+            provider.return_value.search.return_value = self.prices()
+            self.query()
+        self.assertNotIn("additional_platforms", self.app.latest)
 
     def test_city_lookup_can_return_places_outside_popular_list(self):
         city = dict(name="喀什", code="KHG", country="中国", market="domestic")
@@ -118,7 +121,8 @@ class WebAppTests(unittest.TestCase):
             settings = settings_for(chosen, Path(self.tmp.name))
             with self.assertRaisesRegex(ConfigError, "不匹配"):
                 normalize_form(form(destination="PRG", market="domestic"))
-        self.assertEqual(settings.routes[0].name, "上海 → 布拉格")
+        self.assertEqual(settings.routes[0].name,
+                         "上海（SHA · 全部机场） → 布拉格（PRG · 全部机场）")
 
     def test_no_tokens_required_to_query_or_bootstrap(self):
         with patch.dict(os.environ, {}, clear=True), \

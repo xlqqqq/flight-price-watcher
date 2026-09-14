@@ -14,7 +14,9 @@
     notificationSignature: "",
     cityCatalog: new Map(),
     cityPickers: {},
+    trips: [],
   };
+  const MAX_TRIPS = 10;
   const priceFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
 
   function notice(message, error = false) {
@@ -52,19 +54,45 @@
     }
   }
 
-  function cityFor(value) {
-    const normalized = String(value || "").trim().toUpperCase();
-    const cities = Array.from(state.cityCatalog.values());
-    return cities.find((city) => city.code === normalized || cityLabel(city).toUpperCase() === normalized)
-      || cities.find((city) => city.name.toUpperCase() === normalized);
+  function placeIdentity(place) {
+    if (!place || typeof place.code !== "string") return "";
+    const scope = place.scope === "airport" ? "airport" : "city";
+    const code = place.code.toUpperCase();
+    const cityCode = String(place.city_code || (scope === "city" ? code : "")).toUpperCase();
+    return /^[A-Z]{3}$/.test(code) && /^[A-Z]{3}$/.test(cityCode) ? `${scope}:${code}:${cityCode}` : "";
   }
 
-  function cityLabel(city) { return `${city.name} · ${city.code}`; }
-  function cityName(code) { return cityFor(code)?.name || code || "—"; }
+  function cityLabel(place) {
+    if (typeof place?.label === "string" && place.label.trim()) return place.label.trim();
+    const code = String(place?.code || "").toUpperCase();
+    const name = String(place?.name || place?.city_name || code);
+    return place?.scope === "airport" ? `${name}（${code}）` : `${name}（${code} · 全部机场）`;
+  }
+
+  function selectedPlace(input) {
+    const identity = input?.dataset?.placeIdentity || "";
+    const place = state.cityCatalog.get(identity);
+    if (place && input.value === cityLabel(place)) return place;
+    if (input?.dataset) delete input.dataset.placeIdentity;
+    return null;
+  }
+
+  function cityFor(value) {
+    const normalized = String(value || "").trim().toUpperCase();
+    const places = Array.from(state.cityCatalog.values());
+    return places.find((place) => cityLabel(place).toUpperCase() === normalized)
+      || places.find((place) => place.scope === "city" && place.code === normalized)
+      || places.find((place) => String(place.name || "").toUpperCase() === normalized);
+  }
+
+  function cityName(code) { return cityFor(code)?.city_name || cityFor(code)?.name || code || "—"; }
 
   function normalizeCity(input) {
-    const city = cityFor(input.value);
-    if (city) input.value = cityLabel(city);
+    const city = selectedPlace(input) || cityFor(input.value);
+    if (city) {
+      input.value = cityLabel(city);
+      input.dataset.placeIdentity = placeIdentity(city);
+    }
     state.cityPickers[input.id]?.syncClear();
     return city;
   }
@@ -72,13 +100,19 @@
   function mergeCities(cities) {
     if (!Array.isArray(cities)) return [];
     const accepted = [];
-    const codes = new Set();
+    const identities = new Set();
     for (const city of cities) {
       if (!city || typeof city.code !== "string" || !/^[A-Za-z]{3}$/.test(city.code) || typeof city.name !== "string" || !city.name.trim()) continue;
-      const normalized = { ...city, code: city.code.toUpperCase(), name: city.name.trim() };
-      state.cityCatalog.set(normalized.code, normalized);
-      if (!codes.has(normalized.code)) accepted.push(normalized);
-      codes.add(normalized.code);
+      const scope = city.scope === "airport" ? "airport" : "city";
+      const code = city.code.toUpperCase();
+      const cityCode = String(city.city_code || (scope === "city" ? code : "")).toUpperCase();
+      const normalized = { ...city, scope, code, city_code: cityCode, name: city.name.trim() };
+      const identity = placeIdentity(normalized);
+      if (!identity) continue;
+      normalized.label = cityLabel(normalized);
+      state.cityCatalog.set(identity, normalized);
+      if (!identities.has(identity)) accepted.push(normalized);
+      identities.add(identity);
     }
     return accepted;
   }
@@ -88,7 +122,8 @@
     const popular = state.bootstrap?.cities || [];
     if (!normalized) return popular.slice(0, 12);
     return Array.from(state.cityCatalog.values()).filter((city) => {
-      const searchable = [city.name, city.code, city.pinyin, city.en_name, ...(Array.isArray(city.aliases) ? city.aliases : [])];
+      const searchable = [city.name, city.code, city.label, city.city_name, city.city_code,
+        city.airport_name, city.pinyin, city.en_name, ...(Array.isArray(city.aliases) ? city.aliases : [])];
       return searchable.some((value) => String(value || "").toLowerCase().includes(normalized));
     }).slice(0, 20);
   }
@@ -108,6 +143,7 @@
     let composing = false;
     let selectOnClick = false;
     let suppressFocusOpen = false;
+    let optionNodes = [];
 
     function syncClear() { clear.hidden = !input.value; }
 
@@ -129,14 +165,14 @@
 
     function markActive(index) {
       active = index;
-      Array.from(list.children).forEach((option, position) => {
+      optionNodes.forEach((option, position) => {
         option.setAttribute("aria-selected", String(position === active));
         option.classList.toggle("active", position === active);
       });
-      if (active < 0 || !list.children[active]) input.removeAttribute("aria-activedescendant");
+      if (active < 0 || !optionNodes[active]) input.removeAttribute("aria-activedescendant");
       else {
-        input.setAttribute("aria-activedescendant", list.children[active].id);
-        list.children[active].scrollIntoView({ block: "nearest" });
+        input.setAttribute("aria-activedescendant", optionNodes[active].id);
+        optionNodes[active].scrollIntoView({ block: "nearest" });
       }
     }
 
@@ -144,6 +180,7 @@
       const city = options[index];
       if (!city) return;
       input.value = cityLabel(city);
+      input.dataset.placeIdentity = placeIdentity(city);
       syncClear();
       close();
       formError("");
@@ -154,17 +191,32 @@
     }
 
     function render(cities, message, warning = false) {
-      options = cities;
+      options = [...cities].sort((a, b) => String(a.country || "").localeCompare(String(b.country || ""), "zh-CN")
+        || String(a.city_name || a.name).localeCompare(String(b.city_name || b.name), "zh-CN")
+        || Number(a.scope === "airport") - Number(b.scope === "airport")
+        || String(a.name).localeCompare(String(b.name), "zh-CN"));
       active = -1;
+      optionNodes = [];
       input.removeAttribute("aria-activedescendant");
       const fragment = document.createDocumentFragment();
-      cities.forEach((city, index) => {
+      let previousGroup = "";
+      options.forEach((city, index) => {
+        const country = city.country || (city.market === "domestic" ? "中国" : "国际 / 港澳台");
+        const group = `${country}\u0000${city.city_code}`;
+        if (group !== previousGroup) {
+          const groupLabel = element("li", "city-option-group", `${country} › ${city.city_name || city.name}`);
+          groupLabel.setAttribute("role", "presentation");
+          fragment.append(groupLabel);
+          previousGroup = group;
+        }
         const option = element("li", "city-option");
         option.id = `${id}-option-${index}`;
         option.setAttribute("role", "option");
         option.setAttribute("aria-selected", "false");
-        const name = element("span", "city-option-name", city.name);
-        const meta = element("span", "city-option-meta", `${city.country || (city.market === "domestic" ? "中国" : "国际 / 港澳台")} · ${city.code}`);
+        const name = element("span", "city-option-name", city.scope === "airport" ? city.name : `${city.city_name || city.name} · 全部机场`);
+        const meta = element("span", "city-option-meta", city.scope === "airport"
+          ? `具体机场 · ${city.code} · 所属城市 ${city.city_code}`
+          : `城市范围 · ${city.code}`);
         option.append(name, meta);
         option.addEventListener("pointerdown", (event) => {
           cancelSearch();
@@ -172,6 +224,7 @@
           if (event.pointerType !== "touch") event.preventDefault();
         });
         option.addEventListener("click", () => choose(index));
+        optionNodes.push(option);
         fragment.append(option);
       });
       list.replaceChildren(fragment);
@@ -223,15 +276,16 @@
       if (suppressFocusOpen) return;
       selectOnClick = true;
       if (input.value) input.select();
-      const selected = cityFor(input.value);
+      const selected = selectedPlace(input) || cityFor(input.value);
       openSearch(selected ? "" : input.value.trim());
     });
     input.addEventListener("click", () => {
       if (selectOnClick && input.value) input.select();
       selectOnClick = false;
-      if (popup.hidden) openSearch(cityFor(input.value) ? "" : input.value.trim());
+      if (popup.hidden) openSearch((selectedPlace(input) || cityFor(input.value)) ? "" : input.value.trim());
     });
     input.addEventListener("input", () => {
+      delete input.dataset.placeIdentity;
       syncClear();
       formError("");
       detectMarket();
@@ -243,14 +297,14 @@
       if (composing || event.isComposing) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        if (popup.hidden) openSearch(cityFor(input.value) ? "" : input.value.trim());
+        if (popup.hidden) openSearch((selectedPlace(input) || cityFor(input.value)) ? "" : input.value.trim());
         if (options.length) markActive(event.key === "ArrowDown" ? (active + 1) % options.length : (active < 0 ? options.length - 1 : (active - 1 + options.length) % options.length));
       } else if (event.key === "Enter" && !popup.hidden) {
         event.preventDefault();
         if (active >= 0) choose(active);
         else {
-          const exact = cityFor(input.value);
-          const exactIndex = exact ? options.findIndex((city) => city.code === exact.code) : -1;
+          const exact = selectedPlace(input) || cityFor(input.value);
+          const exactIndex = exact ? options.findIndex((city) => placeIdentity(city) === placeIdentity(exact)) : -1;
           if (exactIndex >= 0) choose(exactIndex);
           else if (exact) close();
           else if (options.length && input.value.trim()) choose(0);
@@ -266,6 +320,7 @@
     });
     clear.addEventListener("click", () => {
       input.value = "";
+      delete input.dataset.placeIdentity;
       syncClear();
       detectMarket();
       formError("");
@@ -277,8 +332,8 @@
   }
 
   function detectMarket() {
-    const origin = cityFor($("origin").value);
-    const destination = cityFor($("destination").value);
+    const origin = selectedPlace($("origin")) || cityFor($("origin").value);
+    const destination = selectedPlace($("destination")) || cityFor($("destination").value);
     if ($("market").value !== "auto") {
       $("market-hint").textContent = "使用你选择的航线类型；也支持手动填写 3 位城市代码。";
     } else if (origin && destination) {
@@ -478,6 +533,10 @@
     $("serverchan-bind-start").disabled = credentialLocked || binding.state === "waiting";
     $("serverchan-bind-confirm").disabled = credentialLocked || binding.state !== "waiting" || !safeBindingImage(binding.qr_image);
     $("serverchan-bind-cancel").disabled = credentialLocked || !["waiting", "expired", "error"].includes(binding.state);
+    $("add-trip-button").disabled = state.pending || Boolean(busy) || Boolean(running) || state.trips.length >= MAX_TRIPS;
+    for (const button of $("trip-list").querySelectorAll("button")) {
+      button.disabled = state.pending || Boolean(busy) || Boolean(running);
+    }
     $("serverchan-operation-hint").textContent = running
       ? "监控期间无法绑定、修改凭证或发送测试，请先停止监控。"
       : busy || state.pending || bindingBusy ? "当前操作完成后可绑定、修改凭证或发送测试。"
@@ -485,63 +544,117 @@
           : "绑定或保存密钥不会发送消息。发送测试后，请到微信服务号确认是否收到。";
   }
 
-  function settingsFromForm() {
+  function cloneTrip(trip) {
+    return { ...trip, providers: [...trip.providers] };
+  }
+
+  function tripSignature(trip) {
+    return JSON.stringify([
+      trip.origin_scope, trip.origin, trip.origin_city_code,
+      trip.destination_scope, trip.destination, trip.destination_city_code,
+      trip.market, trip.start_date, trip.end_date,
+      trip.mode, trip.threshold, ...trip.providers,
+    ]);
+  }
+
+  function tripFromEditor() {
     formError("");
     if (!$("watch-form").reportValidity()) return null;
     let origin = normalizeCity($("origin"));
     let destination = normalizeCity($("destination"));
     const originCode = $("origin").value.trim().toUpperCase();
     const destinationCode = $("destination").value.trim().toUpperCase();
-    if (!origin && /^[A-Z]{3}$/.test(originCode)) origin = { code: originCode };
-    if (!destination && /^[A-Z]{3}$/.test(destinationCode)) destination = { code: destinationCode };
+    if (!origin && /^[A-Z]{3}$/.test(originCode)) origin = {
+      scope: "city", code: originCode, city_code: originCode,
+      label: `${originCode}（全部机场）`, name: originCode,
+    };
+    if (!destination && /^[A-Z]{3}$/.test(destinationCode)) destination = {
+      scope: "city", code: destinationCode, city_code: destinationCode,
+      label: `${destinationCode}（全部机场）`, name: destinationCode,
+    };
     if (!origin || !destination) throw new Error("请在出发地和目的地输入城市名称或拼音，再点击搜索结果选择城市。");
     const marketChoice = $("market").value;
     if (marketChoice === "auto" && (!origin.market || !destination.market)) throw new Error("输入了列表外城市代码，请手动选择国内或国际航线类型。");
     const market = marketChoice === "auto"
       ? (origin.market === "domestic" && destination.market === "domestic" ? "domestic" : "international")
       : marketChoice;
-    if (origin.code === destination.code) throw new Error("出发地和目的地不能相同。");
+    if (origin.city_code === destination.city_code) throw new Error("出发地和目的地不能相同或属于同一城市。");
     const startDate = $("start-date").value;
     const endDate = $("end-date").value;
     const days = Math.round((dateValue(endDate) - dateValue(startDate)) / DAY) + 1;
     if (!Number.isFinite(days) || days < 1 || days > 31) throw new Error("请选择有效日期区间，最晚日期不能早于最早日期，且最多包含 31 天。");
     if (startDate < state.bootstrap.today || endDate > state.bootstrap.max_date) throw new Error(`可查询日期为 ${state.bootstrap.today} 至 ${state.bootstrap.max_date}。`);
     const threshold = $("mode").value === "lowest" ? null : Number($("threshold").value);
-    if (threshold !== null && (!Number.isFinite(threshold) || threshold <= 0)) throw new Error("目标价格必须大于 0 元。");
-    const interval = Number($("interval").value);
-    if (!Number.isInteger(interval) || interval < 10 || interval > 10080) throw new Error("查询间隔必须在 10 至 10080 分钟之间。");
+    if (threshold !== null && (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1000000)) throw new Error("目标价格必须是 1 至 1000000 元之间的有效金额。");
     const providers = selectedProviders();
     if (!providers.length) throw new Error("请至少勾选一个查询平台。");
     return {
       origin: origin.code, destination: destination.code, market,
+      origin_scope: origin.scope === "airport" ? "airport" : "city",
+      destination_scope: destination.scope === "airport" ? "airport" : "city",
+      origin_city_code: origin.city_code || origin.code,
+      destination_city_code: destination.city_code || destination.code,
+      origin_label: cityLabel(origin), destination_label: cityLabel(destination),
       start_date: startDate, end_date: endDate, threshold, mode: $("mode").value,
-      interval_minutes: interval, notify: $("notify").value, providers,
+      providers,
     };
   }
 
-  function applySettings(settings) {
-    if (!settings) return;
-    const fields = { origin: "origin", destination: "destination", market: "market", start_date: "start-date", end_date: "end-date", threshold: "threshold", mode: "mode", interval_minutes: "interval", notify: "notify" };
-    for (const [key, id] of Object.entries(fields)) {
-      if (settings[key] !== undefined && settings[key] !== null) {
-        if (id === "interval" && !Array.from($(id).options).some((option) => option.value === String(settings[key]))) {
-          const option = document.createElement("option");
-          option.value = String(settings[key]);
-          option.textContent = `每 ${settings[key]} 分钟`;
-          $(id).append(option);
-        }
-        $(id).value = String(settings[key]);
-      }
+  function globalSettingsFromForm() {
+    const interval = Number($("interval").value);
+    if (!Number.isInteger(interval) || interval < 10 || interval > 10080) throw new Error("查询间隔必须在 10 至 10080 分钟之间。");
+    const notify = $("notify").value;
+    if (!["wechat", "serverchan", "browser"].includes(notify)) throw new Error("请选择有效的提醒方式。");
+    return { interval_minutes: interval, notify };
+  }
+
+  function settingsFromForm() {
+    const globals = globalSettingsFromForm();
+    const editor = tripFromEditor();
+    if (!editor) return null;
+    if (!state.trips.length) return { ...editor, ...globals };
+    if (!state.trips.some((trip) => tripSignature(trip) === tripSignature(editor))) {
+      throw new Error("当前表单有尚未加入清单的修改；请先添加当前行程，或载入清单中的行程再查询。");
     }
-    normalizeCity($("origin"));
-    normalizeCity($("destination"));
+    return { trips: state.trips.map(cloneTrip), ...globals };
+  }
+
+  function applyTripToEditor(settings) {
+    if (!settings) return;
+    const fields = { market: "market", start_date: "start-date", end_date: "end-date", threshold: "threshold", mode: "mode" };
+    for (const [key, id] of Object.entries(fields)) {
+      if (settings[key] !== undefined && settings[key] !== null) $(id).value = String(settings[key]);
+      else if (key === "threshold") $(id).value = "";
+    }
+    for (const side of ["origin", "destination"]) {
+      const code = String(settings[side] || "").toUpperCase();
+      const scope = settings[`${side}_scope`] === "airport" ? "airport" : "city";
+      const cityCode = String(settings[`${side}_city_code`] || (scope === "city" ? code : "")).toUpperCase();
+      const identity = `${scope}:${code}:${cityCode}`;
+      let place = state.cityCatalog.get(identity);
+      if (!place && /^[A-Z]{3}$/.test(code) && /^[A-Z]{3}$/.test(cityCode)) {
+        const label = settings[`${side}_label`] || (scope === "city" ? `${code}（全部机场）` : `${code}（具体机场）`);
+        place = { scope, code, city_code: cityCode, name: label, city_name: label,
+          label, market: settings.market };
+        state.cityCatalog.set(identity, place);
+      }
+      const input = $(side);
+      if (place) {
+        input.value = cityLabel(place);
+        input.dataset.placeIdentity = identity;
+      } else {
+        input.value = code;
+        delete input.dataset.placeIdentity;
+      }
+      state.cityPickers[side]?.syncClear();
+    }
     const providers = Array.isArray(settings.providers)
       ? settings.providers
       : (state.bootstrap.providers || []).map((provider) => provider.id);
     for (const input of $("provider-options").querySelectorAll('input[name="providers"]')) input.checked = providers.includes(input.value);
     updateProviderHint();
-    const origin = cityFor($("origin").value);
-    const destination = cityFor($("destination").value);
+    const origin = selectedPlace($("origin")) || cityFor($("origin").value);
+    const destination = selectedPlace($("destination")) || cityFor($("destination").value);
     if (!settings.origin || !settings.destination) {
       $("market").value = "auto";
     } else if (origin && destination) {
@@ -551,6 +664,74 @@
     detectMarket();
     updateDateHint();
     updateMode();
+  }
+
+  function renderTripList() {
+    const list = $("trip-list");
+    const fragment = document.createDocumentFragment();
+    state.trips.forEach((trip, index) => {
+      const item = element("li", "trip-list-item");
+      const body = element("div", "trip-list-body");
+      body.append(
+        element("strong", "trip-list-route", `${index + 1}. ${trip.origin_label || cityName(trip.origin)} → ${trip.destination_label || cityName(trip.destination)}`),
+        element("span", "trip-list-dates", `${friendlyDate(trip.start_date)} 至 ${friendlyDate(trip.end_date)} · ${trip.market === "domestic" ? "国内" : "国际 / 港澳台"}`),
+        element("span", "trip-list-rule", trip.mode === "lowest" ? "最低价汇总" : `${trip.mode === "both" ? "最低价 + " : ""}低于 ¥${priceFormat.format(trip.threshold)}`),
+        element("span", "trip-list-providers", `${trip.providers.length} 个平台：${trip.providers.map(providerName).join("、")}`),
+      );
+      const actions = element("div", "trip-list-actions");
+      const load = element("button", "trip-list-button", "载入");
+      load.type = "button";
+      load.addEventListener("click", () => { applyTripToEditor(trip); formError(""); });
+      const remove = element("button", "trip-list-button trip-list-remove", "删除");
+      remove.type = "button";
+      remove.addEventListener("click", () => {
+        state.trips.splice(index, 1);
+        if (state.trips.length) applyTripToEditor(state.trips[Math.min(index, state.trips.length - 1)]);
+        renderTripList();
+        formError("");
+      });
+      actions.append(load, remove);
+      item.append(body, actions);
+      fragment.append(item);
+    });
+    list.replaceChildren(fragment);
+    $("trip-count").textContent = `${state.trips.length} / ${MAX_TRIPS}`;
+    $("trip-list-hint").textContent = state.trips.length
+      ? `查询和监控会覆盖清单中的 ${state.trips.length} 条行程。修改当前表单后，请再次点击添加。`
+      : "可添加多条独立行程；清单为空时仍按当前表单查询一条行程。";
+    updateButtons();
+  }
+
+  function addCurrentTrip() {
+    try {
+      const trip = tripFromEditor();
+      if (!trip) return;
+      if (state.trips.length >= MAX_TRIPS) throw new Error(`网页一次最多监控 ${MAX_TRIPS} 条行程。`);
+      if (state.trips.some((item) => tripSignature(item) === tripSignature(trip))) throw new Error("这条行程已经在清单中。");
+      state.trips.push(cloneTrip(trip));
+      renderTripList();
+      notice(`已添加 ${trip.origin_label} → ${trip.destination_label}，清单共 ${state.trips.length} 条行程。`);
+    } catch (error) { formError(error.message); }
+  }
+
+  function applySettings(settings) {
+    if (!settings) return;
+    const savedTrips = Array.isArray(settings.trips) ? settings.trips : [];
+    state.trips = savedTrips
+      .filter((trip) => trip && typeof trip === "object" && Array.isArray(trip.providers))
+      .slice(0, MAX_TRIPS).map(cloneTrip);
+    applyTripToEditor(state.trips[0] || settings);
+    for (const [key, id] of Object.entries({ interval_minutes: "interval", notify: "notify" })) {
+      if (settings[key] === undefined || settings[key] === null) continue;
+      if (id === "interval" && !Array.from($(id).options).some((option) => option.value === String(settings[key]))) {
+        const option = document.createElement("option");
+        option.value = String(settings[key]);
+        option.textContent = `每 ${settings[key]} 分钟`;
+        $(id).append(option);
+      }
+      $(id).value = String(settings[key]);
+    }
+    renderTripList();
     updateChannel();
   }
 
@@ -590,7 +771,7 @@
   function safeBookingUrl(value) {
     try {
       const url = new URL(value);
-      const domains = ["ctrip.com", "ly.com", "qunar.com", "fliggy.com", "google.com", "kiwi.com", "ryanair.com", "trip.com", "skyscanner.com", "kayak.com", "momondo.com", "ch.com", "airasia.com"];
+      const domains = ["ctrip.com", "ly.com", "qunar.com", "fliggy.com", "google.com", "kiwi.com", "ryanair.com", "trip.com", "skyscanner.com", "skyscanner.com.sg", "kayak.com", "momondo.com", "ch.com", "airasia.com"];
       if (url.protocol === "https:" && !url.username && !url.password && (!url.port || url.port === "443") && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) return url.href;
     } catch (_) { /* A missing or invalid link is omitted. */ }
     return null;
@@ -613,44 +794,61 @@
     if (busy) detail = "正在获取所选日期的价格，请稍等。";
     else if (monitor.running && monitor.settings) {
       const settings = monitor.settings;
-      detail = `${cityName(settings.origin)} → ${cityName(settings.destination)} · ${settings.interval_minutes} 分钟查询一次`;
+      if (Array.isArray(settings.trips)) {
+        detail = `${settings.trips.length} 条行程 · ${settings.interval_minutes} 分钟查询一次`;
+      } else {
+        detail = `${settings.origin_label || cityName(settings.origin)} → ${settings.destination_label || cityName(settings.destination)} · ${settings.interval_minutes} 分钟查询一次`;
+      }
       if (monitor.next_run_at) detail += ` · 下次 ${friendlyTime(monitor.next_run_at, true)}`;
     }
     if (monitor.last_error && !busy) detail = `${detail} 最近一次：${monitor.last_error}`;
     $("monitor-detail").textContent = detail;
     $("stop-button").hidden = !monitor.running;
     const latest = status.latest;
-    $("source-heading").textContent = busy && latest ? "上次查询的平台结果（新查询进行中）" : "各平台查询结果";
+    const trips = resultTrips(latest);
+    const hasQuotes = trips.some((trip) => Array.isArray(trip.quotes) && trip.quotes.length);
+    const allFailed = trips.length > 0 && trips.every((trip) => trip.error);
     const badge = $("result-badge");
-    badge.textContent = busy ? "查询中" : latest?.error ? "查询异常" : latest?.quotes?.length ? "已更新" : latest ? "暂无报价" : "等待查询";
-    badge.className = `small-tag${busy ? " busy" : latest?.error ? " error" : latest?.quotes?.length ? " ready" : ""}`;
+    badge.textContent = busy ? "查询中" : allFailed || (latest?.error && !trips.length) ? "查询异常" : hasQuotes ? "已更新" : latest ? "暂无报价" : "等待查询";
+    badge.className = `small-tag${busy ? " busy" : allFailed || (latest?.error && !trips.length) ? " error" : hasQuotes ? " ready" : ""}`;
   }
 
-  function renderSources(latest, quotes, comparable) {
-    const sources = Array.isArray(latest?.sources) ? latest.sources : [];
-    $("source-summary").hidden = !latest;
+  function sourceSummary(trip, quotes, comparable) {
+    const sources = Array.isArray(trip?.sources) ? trip.sources : [];
+    const wrapper = element("div", "source-summary");
+    wrapper.append(element("h4", "source-heading", "各平台查询结果"));
     const comparableProviders = new Set(comparable.map((quote) => quote.provider || quote.source).filter(Boolean));
     const count = comparableProviders.size;
-    $("comparison-scope").textContent = count >= 2
+    const scope = element("p", "comparison-scope", count >= 2
       ? `本次有${count}个平台返回可比报价，最低价仅针对所选平台及日期。`
       : count === 1
         ? "仅1个平台有可比报价；最低价仅代表该平台本次查询结果。"
-        : "暂无可比的含税总价；平台返回状态及其他参考报价如下。";
-    $("comparison-scope").classList.toggle("limited", count < 2);
+        : "暂无可比的含税总价；平台返回状态及其他参考报价如下。");
+    scope.classList.toggle("limited", count < 2);
+    wrapper.append(scope);
     const statuses = { ok: "已返回报价", empty: "暂无报价", error: "查询失败", unsupported: "暂不支持" };
+    const list = element("ul", "source-list");
     const fragment = document.createDocumentFragment();
     for (const source of sources) {
       const status = Object.hasOwn(statuses, source.status) ? source.status : "unknown";
       const card = element("li", `source-card source-${status}`);
       card.dataset.provider = source.id;
       const top = element("div", "source-card-top");
-      const statusText = status === "unsupported" && safeBookingUrl(source.search_url) ? "官网核价" : (statuses[status] || "状态未返回");
+      const statusText = statuses[status] || "状态未返回";
       top.append(element("strong", "source-name", source.name || providerName(source.id)), element("span", "source-status", statusText));
       const matches = comparable.filter((quote) => quote.provider === source.id);
-      const quoteCount = Number.isInteger(source.quote_count) && source.quote_count >= 0 ? source.quote_count : quotes.filter((quote) => quote.provider === source.id).length;
+      const sourceQuotes = quotes.filter((quote) => quote.provider === source.id);
+      const quoteCount = Number.isInteger(source.quote_count) && source.quote_count >= 0 ? source.quote_count : sourceQuotes.length;
       let detail = `${quoteCount} 条报价`;
       if (matches.length) detail += ` · 参考总价 ¥${priceFormat.format(Math.min(...matches.map((quote) => quote.price)))} 起`;
-      else if (quoteCount) detail += " · 无可比总价";
+      else if (sourceQuotes.length) {
+        const reference = sourceQuotes.reduce((lowest, quote) => quote.price < lowest.price ? quote : lowest);
+        detail += ` · 参考展示 ¥${priceFormat.format(reference.price)} 起（不参与比价）`;
+        if (typeof reference.original_price === "number" && Number.isFinite(reference.original_price)
+            && /^[A-Z]{3}$/.test(reference.original_currency || "")) {
+          detail += ` · ${reference.original_currency} ${priceFormat.format(reference.original_price)}`;
+        }
+      } else if (quoteCount) detail += " · 无可比总价";
       card.append(top, element("p", "source-detail", detail));
       if (source.message) {
         const more = element("details", "source-more");
@@ -659,7 +857,7 @@
       }
       const sourceUrl = safeBookingUrl(source.search_url);
       if (sourceUrl) {
-        const link = element("a", "source-search-link", "打开平台核价 ↗");
+        const link = element("a", "source-search-link", "打开平台查价 ↗");
         link.href = sourceUrl;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
@@ -667,25 +865,10 @@
       }
       fragment.append(card);
     }
-    if (!sources.length && latest) fragment.append(element("li", "source-card source-unknown", "本次响应未提供各平台状态。"));
-    $("source-list").replaceChildren(fragment);
-    const additional = Array.isArray(latest?.additional_platforms) ? latest.additional_platforms : [];
-    const additionalBox = $("additional-platforms");
-    const additionalFragment = document.createDocumentFragment();
-    for (const platform of additional) {
-      const url = safeBookingUrl(platform.url);
-      if (!url) continue;
-      const link = element("a", "additional-platform-link", `${platform.name} ↗`);
-      link.href = url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      additionalFragment.append(link);
-    }
-    const additionalCount = additionalFragment.childNodes.length;
-    $("additional-platform-links").replaceChildren(additionalFragment);
-    $("additional-platforms-summary").textContent = `更多平台核价入口 · ${additionalCount} 个`;
-    additionalBox.hidden = !additionalCount;
-    additionalBox.open = false;
+    if (!sources.length && trip) fragment.append(element("li", "source-card source-unknown", "本次响应未提供各平台状态。"));
+    list.append(fragment);
+    wrapper.append(list);
+    return wrapper;
   }
 
   function quoteBasis(quote) {
@@ -717,108 +900,170 @@
     return Array.from(winners.values()).sort((a, b) => String(a.departure_date).localeCompare(String(b.departure_date)));
   }
 
+  function resultTrips(latest) {
+    if (Array.isArray(latest?.trips) && latest.trips.length) return latest.trips;
+    return latest ? [latest] : [];
+  }
+
+  function validQuotes(trip) {
+    return (Array.isArray(trip?.quotes) ? trip.quotes : [])
+      .filter((quote) => typeof quote.price === "number" && Number.isFinite(quote.price) && quote.price > 0 && (!quote.currency || quote.currency === "CNY"))
+      .sort((a, b) => String(a.departure_date).localeCompare(String(b.departure_date)) || Number(a.comparable === false) - Number(b.comparable === false) || a.price - b.price || String(a.source || a.provider).localeCompare(String(b.source || b.provider)));
+  }
+
+  function actualAirportText(quote) {
+    const origin = typeof quote.origin_airport === "string" && /^[A-Z]{3}$/.test(quote.origin_airport) ? quote.origin_airport : "";
+    const destination = typeof quote.destination_airport === "string" && /^[A-Z]{3}$/.test(quote.destination_airport) ? quote.destination_airport : "";
+    return origin && destination ? `实际机场 ${origin} → ${destination}` : "";
+  }
+
+  function tripResultCard(trip, fallbackTime, index) {
+    const quotes = validQuotes(trip);
+    const comparable = quotes.filter((quote) => quote.comparable !== false);
+    const dailyLowest = dailyLowestQuotes(comparable);
+    const best = dailyLowest.length ? dailyLowest.reduce((lowest, quote) => quote.price < lowest.price ? quote : lowest) : null;
+    const card = element("article", "trip-result-card");
+    card.dataset.routeId = String(trip.route_id || "");
+    const heading = element("div", "trip-result-heading");
+    const title = element("div");
+    title.append(
+      element("p", "section-kicker", `TRIP ${index + 1}`),
+      element("h3", "trip-result-title", trip.name || `${cityName(trip.origin)} → ${cityName(trip.destination)}`),
+      element("p", "trip-result-range", `${friendlyDate(trip.start_date)} 至 ${friendlyDate(trip.end_date)} · ${trip.market === "domestic" ? "国内" : "国际 / 港澳台"}`),
+    );
+    heading.append(title, element("span", `small-tag${trip.error ? " error" : " ready"}`, trip.error ? "部分或暂无结果" : "查询完成"));
+    card.append(heading, sourceSummary(trip, quotes, comparable));
+
+    const startDate = trip.start_date || trip.settings?.start_date;
+    const endDate = trip.end_date || trip.settings?.end_date;
+    const rangeNote = startDate && endDate ? `查询区间：${friendlyDate(startDate)}至${friendlyDate(endDate)}。` : "";
+    if (best) {
+      const fare = element("div", "best-fare");
+      const fareBody = element("div");
+      const amount = element("div", "fare-amount");
+      amount.append(element("span", "currency-symbol", "¥"), element("strong", "", priceFormat.format(best.price)), element("span", "price-unit", "起 / 人"));
+      const tieDates = new Set(comparable.filter((quote) => quote.price === best.price).map((quote) => quote.departure_date));
+      fareBody.append(
+        element("p", "fare-route", `${trip.origin_label || cityName(trip.origin)} → ${trip.destination_label || cityName(trip.destination)} · ${trip.market === "domestic" ? "国内" : "国际 / 港澳台"}`),
+        amount,
+        element("p", "best-date", `${friendlyDate(best.departure_date, true)} 出发${tieDates.size > 1 ? ` · 共 ${tieDates.size} 天同价` : ""}`),
+        element("p", "best-source", `最低价 App：${providerName(best.provider)} · 含税参考总价`),
+      );
+      const airports = actualAirportText(best);
+      if (airports) fareBody.append(element("p", "best-airports", airports));
+      const meta = element("div", "fare-meta");
+      const threshold = trip.settings?.threshold;
+      if (typeof threshold === "number" && threshold > 0) {
+        meta.append(element("span", `target-badge${best.price >= threshold ? " above" : ""}`,
+          best.price < threshold ? `低于目标 ¥${priceFormat.format(threshold)}` : `目标 ¥${priceFormat.format(threshold)}`));
+      }
+      const bestUrl = safeBookingUrl(best.url);
+      if (bestUrl) {
+        const link = element("a", "fare-link", `去${providerName(best.provider)}购买 ↗`);
+        link.href = bestUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.setAttribute("aria-label", `前往${providerName(best.provider)}购买 ${trip.name || "该行程"} 的机票`);
+        meta.append(link);
+      }
+      fare.append(fareBody, meta);
+      card.append(fare);
+    } else {
+      card.append(element("div", "notice no-comparable", "本行程暂无可比的含税参考总价。未含税或口径未确认的报价不会被选作最低价，请查看平台状态。"));
+    }
+    card.append(element("p", "price-note", rangeNote + (best
+      ? "每个出发日期只展示所选平台中可比的最低含税参考总价；其他平台结果见上方状态，成交价以跳转后的预订页面为准。"
+      : "本次只有未含税或口径未确认的参考报价，不能据此判断哪个平台的含税总价最低。")));
+
+    if (dailyLowest.length) {
+      const section = element("div", "daily-lowest-section");
+      const tableHeading = element("div", "table-heading");
+      tableHeading.append(element("h4", "", "每天最便宜的 App"), element("span", "", `查询于 ${friendlyTime(trip.queried_at || fallbackTime, true)}`));
+      section.append(tableHeading, element("p", "table-scroll-hint", "左右滑动表格可查看 App 和跳转入口。"));
+      const scroll = element("div", "table-scroll");
+      const table = element("table");
+      const caption = element("caption", "sr-only", `${trip.name || "该行程"}每天最低含税参考总价、对应 App 和购买入口`);
+      const head = element("thead");
+      const headRow = element("tr");
+      for (const [label, className] of [["出发日期", ""], ["当日最低参考总价", ""], ["最便宜的 App", ""], ["前往购买", "table-link-heading"]]) {
+        const cell = element("th", className, label);
+        cell.scope = "col";
+        headRow.append(cell);
+      }
+      head.append(headRow);
+      const body = element("tbody");
+      for (const quote of dailyLowest) {
+        const isBest = Boolean(best) && quote.price === best.price;
+        const row = element("tr", isBest ? "best-row" : "");
+        row.dataset.provider = quote.provider || "";
+        const dateCell = element("td");
+        const dateNode = element("div", "row-date");
+        dateNode.append(element("span", "", friendlyDate(quote.departure_date, true)), element("span", "best-pill", isBest ? "全程最低" : "当日最低"));
+        dateCell.append(dateNode);
+        const priceCell = element("td", "quote-price");
+        const basis = element("span", "quote-basis", quoteBasis(quote));
+        if (quote.price_note) basis.title = quote.price_note;
+        priceCell.append(element("span", "quote-amount", `¥${priceFormat.format(quote.price)}`), basis);
+        if (typeof quote.original_price === "number" && Number.isFinite(quote.original_price) && /^[A-Z]{3}$/.test(quote.original_currency || "")) {
+          const original = element("span", "quote-basis", `原价 ${quote.original_currency} ${priceFormat.format(quote.original_price)}`);
+          if (quote.exchange_date && quote.exchange_rate) original.title = `${quote.exchange_date} 参考汇率：1 ${quote.original_currency} = ${quote.exchange_rate} CNY`;
+          priceCell.append(original);
+        }
+        const appName = providerName(quote.provider);
+        const sourceCell = element("td", "quote-source", appName);
+        if (quote.source && quote.source !== appName) sourceCell.title = `数据来源：${quote.source}`;
+        const airportText = actualAirportText(quote);
+        if (airportText) sourceCell.append(element("span", "quote-basis", airportText));
+        const samePriceApps = new Set(comparable
+          .filter((item) => item.departure_date === quote.departure_date && item.price === quote.price)
+          .map((item) => item.provider || item.source));
+        if (samePriceApps.size > 1) sourceCell.append(element("span", "quote-basis", `另有 ${samePriceApps.size - 1} 个 App 同价`));
+        const linkCell = element("td");
+        const url = safeBookingUrl(quote.url);
+        if (url) {
+          const link = element("a", "", `去${appName}购买 ↗`);
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.setAttribute("aria-label", `前往${appName}购买 ${quote.departure_date} 出发的机票`);
+          linkCell.append(link);
+        } else linkCell.textContent = "—";
+        row.append(dateCell, priceCell, sourceCell, linkCell);
+        body.append(row);
+      }
+      table.append(caption, head, body);
+      scroll.append(table);
+      section.append(scroll);
+      card.append(section);
+    }
+    if (trip.error) card.append(element("div", "notice notice-error result-notice", trip.error));
+    const warnings = Array.isArray(trip.warnings) ? trip.warnings : [];
+    if (warnings.length) {
+      const details = element("details", "result-warnings");
+      details.append(element("summary", "", `查看该行程查询说明 · ${warnings.length} 条`));
+      const items = element("div");
+      for (const warning of warnings) items.append(element("p", "", warning));
+      details.append(items);
+      card.append(details);
+    }
+    return card;
+  }
+
   function renderResults(latest) {
     const signature = JSON.stringify(latest);
     if (signature === state.resultSignature) return;
     state.resultSignature = signature;
-    const quotes = (Array.isArray(latest?.quotes) ? latest.quotes : [])
-      .filter((quote) => typeof quote.price === "number" && Number.isFinite(quote.price) && quote.price > 0 && (!quote.currency || quote.currency === "CNY"))
-      .sort((a, b) => String(a.departure_date).localeCompare(String(b.departure_date)) || Number(a.comparable === false) - Number(b.comparable === false) || a.price - b.price || String(a.source || a.provider).localeCompare(String(b.source || b.provider)));
-    const comparable = quotes.filter((quote) => quote.comparable !== false);
-    const dailyLowest = dailyLowestQuotes(comparable);
-    const best = dailyLowest.length ? dailyLowest.reduce((lowest, quote) => quote.price < lowest.price ? quote : lowest) : null;
-    renderSources(latest, quotes, comparable);
-    $("results-empty").hidden = quotes.length > 0;
-    $("results-content").hidden = !quotes.length;
-    $("best-fare").hidden = !best;
-    $("no-comparable").hidden = Boolean(best);
-    $("target-badge").hidden = true;
-    $("best-link").hidden = true;
-    $("empty-title").textContent = latest ? "这些平台和日期暂时没有可用报价" : "好价格，从一段行程开始";
-    $("empty-copy").textContent = latest ? "可以调整平台、日期或城市后重新查询。平台报错或没有报价，不代表没有航班。" : "选择出发地、目的地、可出发日期和查询平台，比较国内或国际航班的参考总价。";
-    $("result-error").hidden = !latest?.error;
-    $("result-error").textContent = latest?.error || "";
-    const warningBox = $("result-warnings");
-    const warningItems = $("result-warning-items");
-    warningItems.replaceChildren();
-    for (const warning of (latest?.warnings || [])) warningItems.append(element("p", "", warning));
-    $("result-warnings-summary").textContent = `查看本次查询说明 · ${warningItems.childElementCount} 条`;
-    warningBox.hidden = !warningItems.childElementCount;
-    warningBox.open = false;
-    $("quote-rows").replaceChildren();
-    $("daily-lowest-section").hidden = !dailyLowest.length;
-    if (!quotes.length) return;
-
-    const startDate = latest.start_date || latest.settings?.start_date;
-    const endDate = latest.end_date || latest.settings?.end_date;
-    const rangeNote = startDate && endDate ? `查询区间：${friendlyDate(startDate)}至${friendlyDate(endDate)}。` : "";
-    $("price-note").textContent = rangeNote + (best
-      ? "每个出发日期只展示所选平台中可比的最低含税参考总价；其他平台结果见上方状态，成交价以跳转后的预订页面为准。"
-      : "本次只有未含税或口径未确认的参考报价，不能据此判断哪个平台的含税总价最低。");
-    $("query-time").textContent = `查询于 ${friendlyTime(latest.queried_at, true)}`;
-    if (best) {
-      $("fare-route").textContent = `${cityName(latest.origin)} → ${cityName(latest.destination)} · ${latest.market === "domestic" ? "国内" : "国际 / 港澳台"}`;
-      $("best-price").textContent = priceFormat.format(best.price);
-      const tieDates = new Set(comparable.filter((quote) => quote.price === best.price).map((quote) => quote.departure_date));
-      $("best-date").textContent = `${friendlyDate(best.departure_date, true)} 出发${tieDates.size > 1 ? ` · 共 ${tieDates.size} 天同价` : ""}`;
-      const bestProvider = providerName(best.provider);
-      $("best-source").textContent = `最低价 App：${bestProvider} · 含税参考总价`;
-      const bestUrl = safeBookingUrl(best.url);
-      $("best-link").hidden = !bestUrl;
-      if (bestUrl) {
-        $("best-link").href = bestUrl;
-        $("best-link").textContent = `去${bestProvider}核价 ↗`;
-        $("best-link").setAttribute("aria-label", `前往${bestProvider}核实最低机票价格`);
-      }
-      // Only comparable totals from this query may be compared with its threshold.
-      const threshold = latest.settings?.threshold;
-      $("target-badge").hidden = !(typeof threshold === "number" && threshold > 0);
-      if (typeof threshold === "number" && threshold > 0) {
-        $("target-badge").textContent = best.price < threshold ? `低于目标 ¥${priceFormat.format(threshold)}` : `目标 ¥${priceFormat.format(threshold)}`;
-        $("target-badge").classList.toggle("above", best.price >= threshold);
-      }
-    }
+    const trips = resultTrips(latest);
     const fragment = document.createDocumentFragment();
-    for (const quote of dailyLowest) {
-      const isBest = Boolean(best) && quote.price === best.price;
-      const row = element("tr", isBest ? "best-row" : "");
-      row.dataset.provider = quote.provider || "";
-      const dateCell = element("td");
-      const date = element("div", "row-date");
-      date.append(element("span", "", friendlyDate(quote.departure_date, true)));
-      date.append(element("span", "best-pill", isBest ? "全程最低" : "当日最低"));
-      dateCell.append(date);
-      const priceCell = element("td", "quote-price");
-      const basis = element("span", "quote-basis", quoteBasis(quote));
-      if (quote.price_note) basis.title = quote.price_note;
-      priceCell.append(element("span", "quote-amount", `¥${priceFormat.format(quote.price)}`), basis);
-      if (typeof quote.original_price === "number" && Number.isFinite(quote.original_price) && /^[A-Z]{3}$/.test(quote.original_currency || "")) {
-        const original = element("span", "quote-basis", `原价 ${quote.original_currency} ${priceFormat.format(quote.original_price)}`);
-        if (quote.exchange_date && quote.exchange_rate) original.title = `${quote.exchange_date} 参考汇率：1 ${quote.original_currency} = ${quote.exchange_rate} CNY`;
-        priceCell.append(original);
-      }
-      const appName = providerName(quote.provider);
-      const sourceCell = element("td", "quote-source", appName);
-      if (quote.source && quote.source !== appName) sourceCell.title = `数据来源：${quote.source}`;
-      const samePriceApps = new Set(comparable
-        .filter((item) => item.departure_date === quote.departure_date && item.price === quote.price)
-        .map((item) => item.provider || item.source));
-      if (samePriceApps.size > 1) sourceCell.append(element("span", "quote-basis", `另有 ${samePriceApps.size - 1} 个 App 同价`));
-      row.append(dateCell, priceCell, sourceCell);
-      const linkCell = element("td");
-      const url = safeBookingUrl(quote.url);
-      if (url) {
-        const link = element("a", "", `去${appName}核价 ↗`);
-        link.href = url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.setAttribute("aria-label", `在${appName}核实 ${quote.departure_date} 出发的最低机票价格`);
-        linkCell.append(link);
-      } else linkCell.textContent = "—";
-      row.append(linkCell);
-      fragment.append(row);
-    }
-    $("quote-rows").replaceChildren(fragment);
+    trips.forEach((trip, index) => fragment.append(tripResultCard(trip, latest?.queried_at, index)));
+    $("trip-results").replaceChildren(fragment);
+    $("trip-results").hidden = !trips.length;
+    $("results-empty").hidden = Boolean(trips.length);
+    $("empty-title").textContent = latest ? "这些行程暂时没有可用结果" : "好价格，从一段行程开始";
+    $("empty-copy").textContent = latest ? "可以调整平台、日期或城市后重新查询。平台报错或没有报价，不代表没有航班。" : "选择出发地、目的地和可出发日期，查询国内或国际航班的最低参考价。";
+    const fatal = latest?.error && !trips.length ? latest.error : "";
+    $("result-error").hidden = !fatal;
+    $("result-error").textContent = fatal;
   }
 
   function renderNotifications(notifications) {
@@ -912,6 +1157,7 @@
       if (settings) await action("/api/search", settings, "查询已提交，结果区会自动更新。");
     } catch (error) { formError(error.message); }
   });
+  $("add-trip-button").addEventListener("click", addCurrentTrip);
   $("start-button").addEventListener("click", startMonitor);
   $("stop-button").addEventListener("click", () => action("/api/monitor/stop", {}, "已停止自动监控和后续提醒。"));
   $("test-wechat").addEventListener("click", () => action("/api/wechat/test", {}, "微信测试任务已提交；请检查本机微信文件传输助手及提醒记录。"));
@@ -944,8 +1190,14 @@
   }
   $("swap-cities").addEventListener("click", () => {
     const previous = $("origin").value;
+    const previousIdentity = $("origin").dataset.placeIdentity || "";
     $("origin").value = $("destination").value;
+    const destinationIdentity = $("destination").dataset.placeIdentity || "";
     $("destination").value = previous;
+    if (destinationIdentity) $("origin").dataset.placeIdentity = destinationIdentity;
+    else delete $("origin").dataset.placeIdentity;
+    if (previousIdentity) $("destination").dataset.placeIdentity = previousIdentity;
+    else delete $("destination").dataset.placeIdentity;
     state.cityPickers.origin.syncClear();
     state.cityPickers.destination.syncClear();
     state.cityPickers.origin.close();

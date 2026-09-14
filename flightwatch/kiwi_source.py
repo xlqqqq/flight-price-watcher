@@ -164,17 +164,48 @@ class KiwiDealsProvider:
         self._cities[code] = (time.monotonic(), result)
         return result
 
+    @staticmethod
+    def _query_city_code(route: Route, side: str) -> str:
+        scope = getattr(route, f"{side}_scope")
+        selected = getattr(route, side)
+        if scope == "city":
+            return selected
+        if scope == "airport":
+            city = route.city_code(side)
+            if not isinstance(city, str) or not _CODE.fullmatch(city):
+                raise ProviderUnsupported(
+                    f"Kiwi 指定机场 {selected} 缺少可核验的所属城市代码"
+                )
+            return city
+        raise ProviderUnsupported("Kiwi 地点范围必须是城市全部机场或具体机场")
+
+    @staticmethod
+    def _restrict_airports(place: dict, route: Route, side: str) -> dict:
+        if getattr(route, f"{side}_scope") != "airport":
+            return place
+        selected = getattr(route, side)
+        if selected not in place["airports"]:
+            raise ProviderUnsupported(
+                f"Kiwi 未确认机场 {selected} 属于所选城市 {place['code']}，未改查附近机场"
+            )
+        return {**place, "airports": frozenset({selected})}
+
     def search(self, route: Route, today: date) -> SearchResult:
         if route.currency != "CNY":
             raise ProviderUnsupported("Kiwi 中文公开优惠页仅支持 CNY，本次不换算币种")
         if route.stay_nights is not None or route.nonstop or route.travel_class != 1:
             raise ProviderUnsupported("Kiwi 公开优惠页仅支持默认舱位单程参考，无法可靠筛选直飞、往返或指定舱位")
         if not all(isinstance(code, str) and _CODE.fullmatch(code) for code in (route.origin, route.destination)):
-            raise ProviderUnsupported("Kiwi 查询须使用已选择的三字母城市代码")
+            raise ProviderUnsupported("Kiwi 查询须使用已选择的三字母城市或机场代码")
+        origin_city = self._query_city_code(route, "origin")
+        destination_city = self._query_city_code(route, "destination")
         wanted = set(route.departure_dates(today))
         if not wanted:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
-        origin, destination = self._resolve_city(route.origin), self._resolve_city(route.destination)
+        origin = self._restrict_airports(self._resolve_city(origin_city), route, "origin")
+        destination = self._restrict_airports(
+            self._resolve_city(destination_city), route, "destination"
+        )
         market = "domestic" if origin["country"] == destination["country"] == "CN" else "international"
         if route.market != market:
             raise ProviderUnsupported("Kiwi 识别的国内国际范围与所选航线不一致")
@@ -266,7 +297,9 @@ class KiwiDealsProvider:
             quote = Quote(origin=route.origin, destination=route.destination,
                           departure_date=departure, price=price, currency=route.currency,
                           source="Kiwi.com 公开优惠", provider="kiwi", price_basis="unknown",
-                          price_note=PRICE_NOTE, url=url)
+                          price_note=PRICE_NOTE, url=url,
+                          origin_airport=dep_airport["iataCode"],
+                          destination_airport=arr_airport["iataCode"])
             if departure not in quotes or price < quotes[departure].price:
                 quotes[departure] = quote
         warnings = []

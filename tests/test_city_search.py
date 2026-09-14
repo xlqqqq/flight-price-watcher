@@ -38,6 +38,18 @@ PUDONG = [
      "airportCode": "PVG", "airportName": "浦东国际机场",
      "names": ["上海", "浦东国际机场", "中国", "PVG"], "cityCodeType": "CityCode"},
 ]
+SHANGHAI = [
+    {"poiType": "CITY", "cityCode": "SHA", "cityName": "上海", "isIntl": False,
+     "names": ["上海", "中国", "SHA"], "cityCodeType": "CityCode",
+     "airports": [
+         {"cityCode": "SHA", "cityName": "上海", "airportCode": "PVG",
+          "airportName": "浦东国际机场", "distance": 0, "isIntl": False},
+         {"cityCode": "SHA", "cityName": "上海", "airportCode": "SHA",
+          "airportName": "虹桥国际机场", "distance": 0, "isIntl": False},
+         {"cityCode": "HGH", "cityName": "杭州", "airportCode": "HGH",
+          "airportName": "萧山国际机场", "distance": 166, "isIntl": False},
+     ]},
+]
 
 
 class CitySearchTests(unittest.TestCase):
@@ -45,20 +57,24 @@ class CitySearchTests(unittest.TestCase):
         with city_search._CACHE_LOCK:
             city_search._QUERY_CACHE.clear()
             city_search._CITY_CACHE.clear()
+            city_search._AIRPORT_CACHE.clear()
         city_search._LAST_REQUEST = 0
         self.interval = patch.object(city_search, "REQUEST_INTERVAL", 0)
         self.interval.start()
         self.addCleanup(self.interval.stop)
 
-    def test_live_chinese_city_fixture_preserves_multiple_countries_and_deduplicates_airports(self):
+    def test_live_chinese_fixture_keeps_same_code_city_and_airport_distinct(self):
         with patch.object(city_search, "_request", return_value=payload(KASHI)) as request:
             rows = city_search.search_cities("喀什")
-        self.assertEqual(rows, [
-            {"name": "喀什", "code": "KHG", "country": "中国", "market": "domestic"},
-            {"name": "马拉喀什", "code": "RAK", "country": "摩洛哥", "market": "international"},
-        ])
+        self.assertEqual([(row["scope"], row["code"], row["city_code"]) for row in rows],
+                         [("city", "KHG", "KHG"), ("airport", "KHG", "KHG"),
+                          ("city", "RAK", "RAK")])
+        self.assertEqual(rows[0]["country_code"], "CN")
+        self.assertEqual(rows[1]["name"], "喀什徕宁国际机场")
+        self.assertIn("全部机场", rows[0]["label"])
         request.assert_called_once_with("喀什")
         self.assertEqual(city_search.cached_city("khg"), rows[0])
+        self.assertEqual(city_search.cached_place("KHG", "airport", "KHG"), rows[1])
 
     def test_pinyin_query_and_casefold_cache_do_not_require_curated_city(self):
         with patch.object(city_search, "_request", return_value=payload(KASHI[:2])) as request:
@@ -71,11 +87,25 @@ class CitySearchTests(unittest.TestCase):
 
     def test_international_country_handles_null_province_and_nearby_towns_are_not_substituted(self):
         rows = city_search._parse(payload(PRAGUE))
-        self.assertEqual(rows, [{"name": "布拉格(捷克)", "code": "PRG", "country": "捷克", "market": "international"}])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["name"], rows[0]["code"], rows[0]["country_code"]),
+                         ("布拉格", "PRG", "CZ"))
 
-    def test_airport_search_uses_owning_city_code(self):
+    def test_airport_search_returns_owning_city_and_exact_airport(self):
         rows = city_search._parse(payload(PUDONG))
-        self.assertEqual(rows, [{"name": "上海", "code": "SHA", "country": "中国", "market": "domestic"}])
+        self.assertEqual([(row["scope"], row["code"], row["city_code"]) for row in rows],
+                         [("city", "SHA", "SHA"), ("airport", "PVG", "SHA")])
+
+    def test_city_search_expands_only_verified_same_city_airports(self):
+        rows = city_search._parse(payload(SHANGHAI))
+        self.assertEqual([(row["scope"], row["code"]) for row in rows],
+                         [("city", "SHA"), ("airport", "PVG"), ("airport", "SHA")])
+        self.assertEqual(rows[2]["label"], "上海 · 虹桥国际机场（SHA）")
+
+    def test_country_row_is_never_a_selectable_route(self):
+        country = {"poiType": "COUNTRY", "countryName": "中国", "names": ["中国"],
+                   "cities": [{"cityCode": "BJS"}, {"cityCode": "SHA"}]}
+        self.assertEqual(city_search._parse(payload([country])), [])
 
     def test_china_regional_city_is_not_misclassified_as_mainland(self):
         hong_kong = {"poiType": "CITY", "cityCode": "HKG", "cityName": "中国香港",

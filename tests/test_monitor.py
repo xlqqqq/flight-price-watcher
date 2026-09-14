@@ -40,7 +40,8 @@ def quote(price="900", route=None, **changes):
     values = dict(origin=route.origin, destination=route.destination, departure_date=DEPARTURE,
                   price=Decimal(price), currency=route.currency, source="mock fixture source",
                   return_date=route.return_on(DEPARTURE), airline="Fixture airline", flight_number="FX 100",
-                  url="https://www.google.com/travel/flights")
+                  url="https://www.google.com/travel/flights",
+                  origin_airport="PEK", destination_airport="PVG")
     values.update(changes)
     return Quote(**values)
 
@@ -92,6 +93,8 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertIn("低于目标价", self.content())
         self.assertIn("严格低于 CNY 1000.00", self.content())
         self.assertNotIn("最低价汇总", self.content())
+        self.assertIn("实际起降机场：PEK → PVG", self.content())
+        self.assertIn("按本行程继续购买：https://www.google.com/travel/flights", self.content())
         self.assertEqual(self.state.last_alert(self.route.state_key(), "threshold"), (Decimal("800"), NOW))
         stored = self.state.connection.execute("SELECT receipt FROM alerts").fetchone()
         self.assertEqual(stored[0], "accepted-receipt-123")
