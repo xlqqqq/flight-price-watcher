@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from flightwatch.models import ConfigError, ProviderError, ProviderUnsupported, Quote, Route, SearchResult
 from flightwatch.sources import (MultiSourceProvider, additional_platform_links,
-                                 normalize_sources, platform_search_url)
+                                 estimate_requests, normalize_sources, platform_search_url)
 
 
 DAY = date(2026, 10, 1)
@@ -146,6 +146,27 @@ class MultiSourceTests(unittest.TestCase):
         self.a.search.side_effect = self.b.search.side_effect = search
         result = self.provider.search(self.route, DAY)
         self.assertEqual([s["status"] for s in result.sources], ["ok", "ok"])
+
+    def test_all_selected_platforms_start_without_four_source_queue(self):
+        names = ("ctrip", "tongcheng", "qunar", "fliggy", "google_flights")
+        barrier = threading.Barrier(len(names), timeout=3)
+        providers = {}
+        for name in names:
+            provider = Mock()
+            provider.search.side_effect = lambda *_args: (
+                barrier.wait(), SearchResult([], [])
+            )[1]
+            providers[name] = provider
+        route = replace(self.route, sources=names)
+        result = MultiSourceProvider(providers=providers).search(route, DAY)
+        self.assertEqual([item["id"] for item in result.sources], list(names))
+        self.assertTrue(all(item["status"] == "empty" for item in result.sources))
+
+    def test_international_calendar_request_estimates_are_batched(self):
+        route = replace(self.route, market="international")
+        days = [date(2026, 10, 1), date(2026, 10, 31), date(2026, 11, 1)]
+        self.assertEqual(estimate_requests("tongcheng", route, days), 1)
+        self.assertEqual(estimate_requests("fliggy", route, days), 2)
 
     def test_source_order_canonicalized_and_changes_reset_alert_state(self):
         self.assertEqual(normalize_sources(["tongcheng", "ctrip"]), ("ctrip", "tongcheng"))

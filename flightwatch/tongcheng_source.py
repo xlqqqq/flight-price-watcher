@@ -1,4 +1,4 @@
-"""Anonymous Tongcheng domestic web fares, verified live on 2026-09-08.
+"""Anonymous Tongcheng domestic and international web fares.
 
 Primary sources (read as text; no remote JavaScript is executed):
 https://www.ly.com/flights/itinerary/oneway/BJS-SHA?date=2026-09-22
@@ -18,6 +18,20 @@ SSR returns an INITIAL subset (dataflag="some"), not an exhaustive search.
 These are indicative adult one-way totals, excluding optional extras, and do
 not certify current seat availability. The domestic URL is not an
 international provider. Its structure is undocumented and can change.
+
+The official international site was verified live on 2026-09-14:
+https://www.ly.com/iflight/
+https://www.ly.com/miflightapi/ts/calendar?D=SHA&A=TYO&DD=2026-10-01&AD=&TT=OW&ST=1
+https://file.40017.cn/iflight/iflight/app.061a10b4a76a72d0efc4.js
+
+Its anonymous low-price calendar accepts a city pair and returns about 90
+dated rows in one request. The site's current code maps the lowest list ``sp``
+to calendar ``P`` and the lowest list ``tp`` to calendar ``TP``; its default
+tax-inclusive sorting uses ``tp``. We therefore use only a positive ``TP`` for
+an exact requested date. The calendar is cached and does not echo the route,
+so every quote records that limitation and links back to the exact HTTPS
+search. No cookie, login, API credential, dynamic signature, browser execution
+or CAPTCHA handling is used.
 """
 
 from __future__ import annotations
@@ -39,10 +53,16 @@ from .models import ProviderError, ProviderUnsupported, Quote, Route, SearchResu
 
 
 _MAX_HTML_BYTES = 5_000_000
+_MAX_JSON_BYTES = 2_000_000
 _MAX_STATE_CHARS = 2_000_000
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 _SUBSET_WARNING = "同程仅比较公开网页初始返回的航班，未覆盖该平台全部航班；最终可售总价请到购票页确认"
+_INTERNATIONAL_ENDPOINT = "https://www.ly.com/miflightapi/ts/calendar"
+_INTERNATIONAL_WARNING = (
+    "同程国际价格来自公开低价日历缓存，不是实时可售航班列表；"
+    "响应不回显航线，程序仅按请求的官方 HTTPS 航线和精确日期取值，最终价格请到购票页确认"
+)
 
 
 @dataclass(frozen=True)
@@ -263,7 +283,31 @@ class TongchengProvider:
         return (f"https://www.ly.com/flights/itinerary/oneway/{route.origin}-{route.destination}?"
                 + urllib.parse.urlencode({"date": day.isoformat()}))
 
-    def _request(self, url: str) -> str:
+    @staticmethod
+    def _international_page_url(route: Route, day: date) -> str:
+        params = {
+            "advanced": "false",
+            "departAirportCode": route.origin,
+            "arriveAirportCode": route.destination,
+            "para": (
+                f"{route.origin}*{route.destination}*{day.isoformat()}**"
+                "OW*1_0_0*Y|S|C|F"
+            ),
+        }
+        return "https://www.ly.com/iflight/book1.html?" + urllib.parse.urlencode(params)
+
+    @staticmethod
+    def _international_calendar_url(route: Route, day: date) -> str:
+        return _INTERNATIONAL_ENDPOINT + "?" + urllib.parse.urlencode({
+            "D": route.origin,
+            "A": route.destination,
+            "DD": day.isoformat(),
+            "AD": "",
+            "TT": "OW",
+            "ST": 1,
+        })
+
+    def _reserve_request(self) -> None:
         self._check_cancelled()
         if self.requests_used >= self.max_requests:
             raise ProviderError("同程查询已达到本轮请求上限")
@@ -274,6 +318,9 @@ class TongchengProvider:
         self._check_cancelled()
         self.requests_used += 1
         self._last_request = time.monotonic()
+
+    def _request(self, url: str) -> str:
+        self._reserve_request()
         request = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0", "Accept": "text/html",
             "Accept-Language": "zh-CN,zh;q=0.9", "Referer": "https://www.ly.com/flights/",
@@ -291,11 +338,79 @@ class TongchengProvider:
         except UnicodeDecodeError:
             raise ProviderError("同程网页编码发生变化") from None
 
+    def _request_international_calendar(self, route: Route, day: date) -> dict:
+        self._reserve_request()
+        page_url = self._international_page_url(route, day)
+        request = urllib.request.Request(
+            self._international_calendar_url(route, day),
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Referer": page_url,
+                # These are the international website's fixed channel headers,
+                # not user credentials or configurable API tokens.
+                "pc-token": "1",
+                "t-token": "1",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                location = urllib.parse.urlsplit(response.url)
+                final_query = urllib.parse.parse_qs(
+                    location.query, keep_blank_values=True,
+                )
+                expected_query = {
+                    "D": route.origin,
+                    "A": route.destination,
+                    "DD": day.isoformat(),
+                    "AD": "",
+                    "TT": "OW",
+                    "ST": "1",
+                }
+                try:
+                    trusted_location = (
+                        location.scheme == "https"
+                        and location.hostname == "www.ly.com"
+                        and location.port in (None, 443)
+                        and location.username is None
+                        and location.password is None
+                        and location.path == "/miflightapi/ts/calendar"
+                        and not location.fragment
+                        and all(final_query.get(key) == [value]
+                                for key, value in expected_query.items())
+                    )
+                except ValueError:
+                    trusted_location = False
+                content_type = response.headers.get("Content-Type", "")
+                if not trusted_location:
+                    raise ProviderError("同程国际日历跳转到非预期地址，未读取其价格")
+                if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                    raise ProviderError("同程国际日历返回类型不是 JSON，可能是验证页")
+                body = response.read(_MAX_JSON_BYTES + 1)
+            if len(body) > _MAX_JSON_BYTES:
+                raise ProviderError("同程国际日历响应超过大小限制，可能接口已变化")
+
+            def reject_constant(_value):
+                raise ValueError("非标准数字常量")
+
+            data = json.loads(
+                body.decode("utf-8"), parse_float=Decimal,
+                parse_constant=reject_constant,
+            )
+        except urllib.error.HTTPError as exc:
+            raise ProviderError(f"同程国际日历返回 HTTP {exc.code}，可能需要稍后重试") from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            raise ProviderError(f"同程国际日历查询网络失败（{type(exc).__name__}）") from None
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise ProviderError("同程国际日历返回非 JSON 内容，可能是验证页或接口已变化") from None
+        if not isinstance(data, dict):
+            raise ProviderError("同程国际日历响应根节点不是对象")
+        return data
+
     def search(self, route: Route, today: date) -> SearchResult:
-        if route.market != "domestic":
-            raise ProviderUnsupported("同程国际官网需要动态签名，后台无法稳定匿名读取报价；可打开本次路线和日期到同程核价")
         if route.currency != "CNY":
-            raise ProviderUnsupported("同程国内网页只提供 CNY 价格")
+            raise ProviderUnsupported("同程公开网页只提供 CNY 价格")
         if route.stay_nights is not None:
             raise ProviderUnsupported("同程公开网页数据源目前仅支持单程")
         if route.travel_class != 1:
@@ -308,6 +423,11 @@ class TongchengProvider:
         dates = route.departure_dates(today)
         if not dates:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
+        if route.market == "international":
+            data = self._request_international_calendar(route, min(dates))
+            return self._parse_international(data, route, set(dates))
+        if route.market != "domestic":
+            raise ProviderUnsupported("同程 market 只能为 domestic 或 international")
         quotes, warnings, failures = [], [_SUBSET_WARNING], []
         succeeded = 0
         for day in dates:
@@ -330,6 +450,71 @@ class TongchengProvider:
             raise ProviderError("；".join(failures) or "同程未能取得有效网页数据")
         warnings.extend(failures)
         return SearchResult(quotes, list(dict.fromkeys(warnings)))
+
+    def _parse_international(
+            self, data: dict, route: Route, wanted: set[date]) -> SearchResult:
+        payload = data.get("data")
+        if (data.get("code") != 200 or not isinstance(payload, dict)
+                or payload.get("R") != "0"):
+            raise ProviderError("同程国际日历未确认查询成功，未将响应当作有效票价")
+        rows = payload.get("RD")
+        if not isinstance(rows, list):
+            raise ProviderError("同程国际日历缺少 RD 日期列表")
+
+        # LP/TP describe the whole returned calendar rather than the requested
+        # date. Validate their shape, but never substitute them for a dated row.
+        _amount(payload.get("LP"), "国际日历最低销售价 LP")
+        _amount(payload.get("TP"), "国际日历最低总价 TP")
+
+        quotes_by_day: dict[date, Quote] = {}
+        seen: set[date] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ProviderError("同程国际日历日期行格式发生变化")
+            raw_day = row.get("DD")
+            if not isinstance(raw_day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_day):
+                raise ProviderError("同程国际日历出发日期格式发生变化")
+            try:
+                day = date.fromisoformat(raw_day)
+            except ValueError:
+                raise ProviderError("同程国际日历包含无效出发日期") from None
+            if day in seen:
+                raise ProviderError("同程国际日历包含重复出发日期，无法唯一匹配报价")
+            seen.add(day)
+            if row.get("RD") != "":
+                raise ProviderError("同程单程国际日历出现返程日期，停止解析以避免行程误报")
+            sale_price = _amount(row.get("P"), "国际日历销售价 P")
+            total_price = _amount(row.get("TP"), "国际日历总价 TP")
+            if total_price < sale_price:
+                raise ProviderError("同程国际日历总价低于销售价，价格口径可能已变化")
+            if day not in wanted or total_price == 0:
+                continue
+            quotes_by_day[day] = Quote(
+                origin=route.origin,
+                destination=route.destination,
+                departure_date=day,
+                price=total_price,
+                currency="CNY",
+                source="同程国际低价日历",
+                url=self._international_page_url(route, day),
+                provider="tongcheng",
+                price_basis="total",
+                price_note=(
+                    f"同程国际低价日历缓存参考：销售价 P={sale_price} 元，"
+                    f"采用官网总价 TP={total_price} 元；1 成人单程、平台默认舱位。"
+                    "日历响应不回显航线且不代表实时可售，税费明细、行李和最终价格请到购票页确认"
+                ),
+            )
+
+        missing = wanted - quotes_by_day.keys()
+        warnings = [_INTERNATIONAL_WARNING]
+        if missing:
+            warnings.append(
+                f"同程国际低价日历有 {len(missing)} 个所选日期暂无有效总价；"
+                "可能尚无缓存、无航班或超出约 90 天日历范围，不能据此判断售罄"
+            )
+        return SearchResult(
+            [quotes_by_day[day] for day in sorted(quotes_by_day)], warnings)
 
     def _parse(self, data: dict, route: Route, day: date) -> SearchResult:
         state = data.get("state")

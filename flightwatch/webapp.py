@@ -147,7 +147,7 @@ class Dashboard:
         return dict(today=today.isoformat(), max_date=(today + timedelta(days=365)).isoformat(),
                     cities=CITIES, wechat=desktop_status(), defaults=defaults,
                     providers=list(PROVIDERS), serverchan=channel_status(self.data_dir),
-                    serverchan_binding=self._binding_status(), version="2.5.0")
+                    serverchan_binding=self._binding_status(), version="2.6.0")
 
     def city_lookup(self, query: str):
         from .cities import CITIES
@@ -494,7 +494,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Flightwatch/2.5"
+    server_version = "Flightwatch/2.6"
     def log_message(self, *args):
         pass
 

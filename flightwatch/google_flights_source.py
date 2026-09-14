@@ -8,6 +8,7 @@ confirm CNY and required taxes/fees. See docs/google-flights-source.md.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
@@ -37,6 +38,7 @@ PRICE_NOTE = (
     "仅比较本次网页返回的航班，可能含中转，并非全部可售航班。"
     "行李、可选服务及部分支付方式可能另收费，成交价请到预订页核实"
 )
+_DATE_WORKERS = 4
 
 
 class _AccessBlocked(ProviderError):
@@ -142,13 +144,19 @@ class GoogleFlightsProvider:
         self.requests_used = 0
         self._last_request = None
         self._request_lock = threading.Lock()
+        self._request_context = threading.local()
 
     def _check_cancelled(self):
-        if self.cancelled is not None and self.cancelled():
+        batch_cancelled = getattr(self._request_context, "cancelled", None)
+        if ((self.cancelled is not None and self.cancelled())
+                or (batch_cancelled is not None and batch_cancelled())):
             raise _AccessBlocked("监控已停止，取消 Google Flights 后续查询")
 
     def _request(self, url):
         self._check_cancelled()
+        # The lock protects the per-provider request budget and start-time
+        # spacing.  It must not cover DNS/TLS/download time: independent date
+        # responses can safely be in flight together after their paced start.
         with self._request_lock:
             self._check_cancelled()
             if self.requests_used >= self.max_requests:
@@ -162,30 +170,30 @@ class GoogleFlightsProvider:
             self._check_cancelled()
             self.requests_used += 1
             self._last_request = time.monotonic()
-            request = urllib.request.Request(url, headers={
-                "User-Agent": _USER_AGENT, "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html", "Accept-Encoding": "identity",
-            })
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    location = urllib.parse.urlsplit(response.url)
-                    if location.scheme != "https" or location.hostname != "www.google.com" or not location.path.startswith("/travel/flights"):
-                        raise _AccessBlocked("Google Flights 跳转到登录、同意或验证页面，本轮已停止")
-                    if "unsupported" in location.path:
-                        raise ProviderError("Google Flights 暂不接受当前客户端，未读取不受支持页面的价格")
-                    body = response.read(_MAX_RESPONSE_BYTES + 1)
-                if len(body) > _MAX_RESPONSE_BYTES:
-                    raise ProviderError("Google Flights 页面超过大小限制")
-                self._check_cancelled()
-                return body.decode("utf-8")
-            except urllib.error.HTTPError as exc:
-                if exc.code in {401, 403, 429}:
-                    raise _AccessBlocked(f"Google Flights 返回 HTTP {exc.code}，可能要求验证，本轮停止且不绕过") from None
-                raise ProviderError(f"Google Flights 返回 HTTP {exc.code}") from None
-            except (urllib.error.URLError, TimeoutError, OSError, HTTPException) as exc:
-                raise ProviderError(f"Google Flights 网络查询失败（{type(exc).__name__}）") from None
-            except UnicodeDecodeError:
-                raise ProviderError("Google Flights 页面编码异常") from None
+        request = urllib.request.Request(url, headers={
+            "User-Agent": _USER_AGENT, "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html", "Accept-Encoding": "identity",
+        })
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                location = urllib.parse.urlsplit(response.url)
+                if location.scheme != "https" or location.hostname != "www.google.com" or not location.path.startswith("/travel/flights"):
+                    raise _AccessBlocked("Google Flights 跳转到登录、同意或验证页面，本轮已停止")
+                if "unsupported" in location.path:
+                    raise ProviderError("Google Flights 暂不接受当前客户端，未读取不受支持页面的价格")
+                body = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(body) > _MAX_RESPONSE_BYTES:
+                raise ProviderError("Google Flights 页面超过大小限制")
+            self._check_cancelled()
+            return body.decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            if exc.code in {401, 403, 429}:
+                raise _AccessBlocked(f"Google Flights 返回 HTTP {exc.code}，可能要求验证，本轮停止且不绕过") from None
+            raise ProviderError(f"Google Flights 返回 HTTP {exc.code}") from None
+        except (urllib.error.URLError, TimeoutError, OSError, HTTPException) as exc:
+            raise ProviderError(f"Google Flights 网络查询失败（{type(exc).__name__}）") from None
+        except UnicodeDecodeError:
+            raise ProviderError("Google Flights 页面编码异常") from None
 
     def search(self, route: Route, today: date) -> SearchResult:
         self._check_cancelled()
@@ -204,23 +212,56 @@ class GoogleFlightsProvider:
         wanted = route.departure_dates(today)
         if not wanted:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
-        quotes, warnings, completed = [], [], 0
-        for departure in wanted:
-            self._check_cancelled()
+        stop = threading.Event()
+
+        def query_day(departure):
+            self._request_context.cancelled = stop.is_set
             query = f"One way flights from {names[0]} to {names[1]} on {departure.isoformat()} for 1 adult in economy"
             url = ENDPOINT + "?" + urllib.parse.urlencode({"q": query, "hl": "en", "curr": "CNY"})
             try:
                 result = self._parse_page(self._request(url), route, departure, url)
                 self._check_cancelled()
-                quotes.extend(result.quotes)
-                warnings.extend(result.warnings)
-                completed += 1
-            except _AccessBlocked:
-                raise
-            except ProviderUnsupported:
+                return result
+            except (_AccessBlocked, ProviderUnsupported):
+                stop.set()
                 raise
             except ProviderError as exc:
-                warnings.append(f"{departure.isoformat()}：{exc}")
+                return exc
+            finally:
+                try:
+                    del self._request_context.cancelled
+                except AttributeError:
+                    pass
+
+        # Probe the first day before starting parallel work. Access challenges,
+        # consent redirects and route mismatches therefore stop after exactly
+        # one request instead of launching a batch against a blocked endpoint.
+        outcomes = {wanted[0]: query_day(wanted[0])}
+        remaining = wanted[1:]
+        if remaining:
+            futures = {}
+            with ThreadPoolExecutor(max_workers=min(_DATE_WORKERS, len(remaining)),
+                                    thread_name_prefix="google-date") as pool:
+                for departure in remaining:
+                    futures[pool.submit(query_day, departure)] = departure
+                try:
+                    for future in as_completed(futures):
+                        outcomes[futures[future]] = future.result()
+                except BaseException:
+                    stop.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
+
+        quotes, warnings, completed = [], [], 0
+        for departure in wanted:
+            result = outcomes[departure]
+            if isinstance(result, ProviderError):
+                warnings.append(f"{departure.isoformat()}：{result}")
+                continue
+            quotes.extend(result.quotes)
+            warnings.extend(result.warnings)
+            completed += 1
         if not completed:
             raise ProviderError("；".join(warnings))
         warnings.append("Google Flights 仅比较各日期网页初始返回且有有效价格的航班，不代表全部航班；报价可能与最终预订页不同")

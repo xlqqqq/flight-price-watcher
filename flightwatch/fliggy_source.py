@@ -1,4 +1,4 @@
-"""Anonymous Fliggy domestic flight search, verified 2026-09-09.
+"""Anonymous Fliggy domestic and international flight prices.
 
 Official sources:
 https://www.fliggy.com/
@@ -6,6 +6,9 @@ https://g.alicdn.com/trip/rc-pc-home/1.1.26/index.js
 https://g.alicdn.com/trip/flight-searchow/0.4.77/global/config-min.js
 https://g.alicdn.com/trip/flight-searchow/0.4.77/mods/flight-listing/flightItem-min.js
 https://g.alicdn.com/trip/flight-searchow/0.4.77/global/cabinManager-min.js
+https://sijipiao.fliggy.com/ie/flight_search_result.htm
+https://g.alicdn.com/trip/iflight-search/1.10.94/global/conf/index-min.js
+https://g.alicdn.com/trip/iflight-search/1.10.94/mods/week-price/oneway-min.js
 
 The homepage links to sjipiao.fliggy.com/flight_search_result.htm, which
 redirects to /homeow/trip_flight_search.htm. Its config and loader explicitly
@@ -22,6 +25,27 @@ application fares, special fares and flagged packages are excluded.
 
 This is an undocumented public website backend, not a supported partner API;
 prices remain booking-page references, not a guarantee of available seats.
+
+For international routes, the official page uses the anonymous
+``r.fliggy.com/cheapestCalendar/pc`` endpoint for its price calendar.  With
+``calendarType=1`` and a month-start ``leaveDate``, the same anonymous endpoint
+returns the selected natural month in one response.
+The page template renders ``price`` as the fare and ``price + tax`` when the
+"total price" display is selected.  We therefore use only rows that exactly
+match the requested route and date, and add the returned tax.  One request per
+natural month replaces a per-day search, so when the month view succeeds even
+a year-long range needs only about thirteen requests.  The calendar does not
+return a flight number or fare rules;
+its result is a current platform low-price reference that must be confirmed on
+the linked result page.  The detailed international listing endpoint currently
+returns Fliggy's slide challenge to anonymous server requests, and this module
+does not attempt to evade that access control.
+
+The month view occasionally responds with an explicit ``success:false`` while
+the same official seven-day view remains available.  Only for that explicit
+service refusal do we fall back to non-overlapping seven-day windows.  Network,
+schema, route, link and amount validation failures are never hidden by a
+fallback.
 """
 
 from __future__ import annotations
@@ -36,15 +60,25 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from datetime import date, datetime
+from calendar import monthrange
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from .models import ProviderError, ProviderUnsupported, Quote, Route, SearchResult
 
 
 ENDPOINT = "https://sjipiao.fliggy.com/searchow/search.htm"
+INTERNATIONAL_CALENDAR_ENDPOINT = "https://r.fliggy.com/cheapestCalendar/pc"
 _CALLBACK = "flightwatch"
 _MAX_RESPONSE_BYTES = 8_000_000
+_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+)
+
+
+class _CalendarServiceRejected(ProviderError):
+    """The endpoint explicitly declined this calendar shape, not bad data."""
 
 
 def parse_jsonp(text: str) -> dict:
@@ -93,12 +127,16 @@ class FliggyProvider:
 
     @staticmethod
     def _booking_url(route: Route, day: date) -> str:
-        return "https://sjipiao.fliggy.com/flight_search_result.htm?" + urllib.parse.urlencode({
+        root = ("https://sijipiao.fliggy.com/ie/flight_search_result.htm"
+                if route.market == "international"
+                else "https://sjipiao.fliggy.com/flight_search_result.htm")
+        return root + "?" + urllib.parse.urlencode({
             "tripType": "0", "depCity": route.origin, "arrCity": route.destination,
             "depDate": day.isoformat(),
         })
 
-    def _request(self, route: Route, day: date) -> dict:
+    def _before_request(self) -> None:
+        """Apply the shared per-provider budget and start-time spacing."""
         self._check_cancelled()
         if self.requests_used >= self.max_requests:
             raise ProviderError("飞猪查询已达到本轮请求上限")
@@ -109,22 +147,8 @@ class FliggyProvider:
         self._check_cancelled()
         self.requests_used += 1
         self._last_request = time.monotonic()
-        # These are the official search page's anonymous defaults. Conditions
-        # in returned offers are still checked; member prices are not alerts.
-        params = {
-            "tripType": "0", "depCity": route.origin, "depCityName": "",
-            "arrCity": route.destination, "arrCityName": "", "depDate": day.isoformat(),
-            "searchSource": "99", "sKey": "", "qid": "", "needMemberPrice": "true",
-            "_input_charset": "utf-8", "ua": "", "itemId": "", "openCb": "false",
-            "callback": _CALLBACK,
-        }
-        request = urllib.request.Request(ENDPOINT + "?" + urllib.parse.urlencode(params), headers={
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://sjipiao.fliggy.com/homeow/trip_flight_search.htm?" + urllib.parse.urlencode({
-                "depCity": route.origin, "arrCity": route.destination,
-                "depDate": day.isoformat(), "tripType": "0",
-            }),
-        })
+
+    def _open_jsonp(self, request: urllib.request.Request) -> dict:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = response.read(_MAX_RESPONSE_BYTES + 1)
@@ -144,11 +168,57 @@ class FliggyProvider:
         except UnicodeDecodeError:
             raise ProviderError("飞猪返回无法识别的文本，可能是验证页") from None
 
+    def _request(self, route: Route, day: date) -> dict:
+        self._before_request()
+        # These are the official search page's anonymous defaults. Conditions
+        # in returned offers are still checked; member prices are not alerts.
+        params = {
+            "tripType": "0", "depCity": route.origin, "depCityName": "",
+            "arrCity": route.destination, "arrCityName": "", "depDate": day.isoformat(),
+            "searchSource": "99", "sKey": "", "qid": "", "needMemberPrice": "true",
+            "_input_charset": "utf-8", "ua": "", "itemId": "", "openCb": "false",
+            "callback": _CALLBACK,
+        }
+        request = urllib.request.Request(ENDPOINT + "?" + urllib.parse.urlencode(params), headers={
+            "User-Agent": _USER_AGENT,
+            "Referer": "https://sjipiao.fliggy.com/homeow/trip_flight_search.htm?" + urllib.parse.urlencode({
+                "depCity": route.origin, "arrCity": route.destination,
+                "depDate": day.isoformat(), "tripType": "0",
+            }),
+        })
+        return self._open_jsonp(request)
+
+    def _request_calendar(self, route: Route, first_day: date, calendar_type: str) -> dict:
+        self._before_request()
+        params = {
+            "bizType": "1", "searchBy": "", "depCityCode": route.origin,
+            "arrCityCode": route.destination, "leaveDate": first_day.isoformat(),
+            "agentId": "-1", "calendarType": calendar_type, "tripType": "0",
+            "b2g": "0", "formNo": "-1", "callback": _CALLBACK,
+        }
+        request = urllib.request.Request(
+            INTERNATIONAL_CALENDAR_ENDPOINT + "?" + urllib.parse.urlencode(params),
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Accept": "application/javascript, application/json, */*;q=0.8",
+                "Referer": self._booking_url(route, first_day),
+            },
+        )
+        return self._open_jsonp(request)
+
+    def _request_month_calendar(self, route: Route, first_day: date) -> dict:
+        if first_day.day != 1:
+            raise ProviderError("飞猪国际月历请求必须从自然月第一天开始")
+        return self._request_calendar(route, first_day, "1")
+
+    def _request_week_calendar(self, route: Route, first_day: date) -> dict:
+        return self._request_calendar(route, first_day, "0")
+
     def search(self, route: Route, today: date) -> SearchResult:
-        if route.market != "domestic":
-            raise ProviderUnsupported("飞猪国际搜索会触发滑块验证，后台无法稳定匿名读取报价；可打开本次路线和日期到飞猪核价")
+        if route.market not in {"domestic", "international"}:
+            raise ProviderUnsupported("飞猪需要明确国内或国际航线")
         if route.currency != "CNY":
-            raise ProviderUnsupported("飞猪国内公开航班页只提供 CNY 价格")
+            raise ProviderUnsupported("飞猪公开航班页只提供 CNY 价格")
         if route.stay_nights is not None:
             raise ProviderUnsupported("飞猪公开航班数据源目前仅支持单程")
         if route.travel_class != 1:
@@ -160,6 +230,11 @@ class FliggyProvider:
         dates = route.departure_dates(today)
         if not dates:
             return SearchResult([], ["配置中没有尚未过期的出发日期"])
+        if route.market == "international":
+            return self._search_international(route, dates)
+        return self._search_domestic(route, dates)
+
+    def _search_domestic(self, route: Route, dates: list[date]) -> SearchResult:
         quotes, warnings, failures = [], [], []
         succeeded = 0
         for day in dates:
@@ -181,6 +256,174 @@ class FliggyProvider:
         if not succeeded:
             raise ProviderError("；".join(failures) or "飞猪未取得有效票价数据")
         return SearchResult(quotes, list(dict.fromkeys(warnings + failures)))
+
+    def _search_international(self, route: Route, dates: list[date]) -> SearchResult:
+        months: dict[date, set[date]] = {}
+        for day in dates:
+            months.setdefault(day.replace(day=1), set()).add(day)
+        quotes, warnings, failures = [], [], []
+        succeeded = 0
+        for first_day, wanted in sorted(months.items()):
+            last_day = first_day.replace(day=monthrange(first_day.year, first_day.month)[1])
+            try:
+                self._check_cancelled()
+            except ProviderError as exc:
+                failures.append(str(exc))
+                break
+            if self.requests_used >= self.max_requests:
+                failures.append("飞猪查询已达到本轮请求上限，部分日期未查询")
+                break
+            try:
+                try:
+                    result = self._parse_month_calendar(
+                        self._request_month_calendar(route, first_day), route, wanted, first_day
+                    )
+                except _CalendarServiceRejected as rejected:
+                    warnings.append(
+                        f"{first_day:%Y-%m} 飞猪月度日历暂时拒绝本次请求，已自动改用七日低价日历"
+                    )
+                    try:
+                        result = self._search_week_fallback(route, wanted)
+                    except ProviderError as fallback_error:
+                        raise ProviderError(
+                            f"{rejected}；七日低价日历降级也未完成：{fallback_error}"
+                        ) from None
+                succeeded += 1
+                quotes.extend(result.quotes)
+                warnings.extend(result.warnings)
+            except ProviderError as exc:
+                failures.append(f"{first_day} 至 {last_day}：{exc}")
+        if not succeeded:
+            raise ProviderError("；".join(failures) or "飞猪国际最低价日历未取得有效数据")
+        warnings.append(
+            "飞猪国际报价来自官网最低价日历；该接口不返回具体航班号或票价规则，"
+            "点击购票页后请确认当前可售价格及行李条件"
+        )
+        return SearchResult(quotes, list(dict.fromkeys(warnings + failures)))
+
+    def _search_week_fallback(self, route: Route, wanted: set[date]) -> SearchResult:
+        pending = set(wanted)
+        quotes, warnings, failures = [], [], []
+        succeeded = 0
+        while pending:
+            first_day = min(pending)
+            last_day = first_day + timedelta(days=6)
+            window = {day for day in pending if first_day <= day <= last_day}
+            try:
+                self._check_cancelled()
+            except ProviderError as exc:
+                failures.append(str(exc))
+                break
+            if self.requests_used >= self.max_requests:
+                failures.append("飞猪查询已达到本轮请求上限，部分日期未查询")
+                break
+            try:
+                result = self._parse_week_calendar(
+                    self._request_week_calendar(route, first_day), route, window, first_day
+                )
+                succeeded += 1
+                quotes.extend(result.quotes)
+                warnings.extend(result.warnings)
+            except ProviderError as exc:
+                failures.append(f"{first_day} 至 {last_day}：{exc}")
+            pending.difference_update(window)
+        if not succeeded:
+            raise ProviderError("；".join(failures) or "飞猪七日低价日历未取得有效数据")
+        return SearchResult(quotes, list(dict.fromkeys(warnings + failures)))
+
+    def _parse_month_calendar(
+        self, response: dict, route: Route, wanted: set[date], first_day: date
+    ) -> SearchResult:
+        if first_day.day != 1:
+            raise ProviderError("飞猪国际月历解析必须使用自然月第一天")
+        return self._parse_calendar(
+            response, route, wanted,
+            lambda departure: (departure.year == first_day.year
+                               and departure.month == first_day.month),
+            "月度", "月份",
+        )
+
+    def _parse_week_calendar(
+        self, response: dict, route: Route, wanted: set[date], first_day: date
+    ) -> SearchResult:
+        last_day = first_day + timedelta(days=6)
+        return self._parse_calendar(
+            response, route, wanted,
+            lambda departure: first_day <= departure <= last_day,
+            "七日", "七日窗口",
+        )
+
+    def _parse_calendar(
+        self, response: dict, route: Route, wanted: set[date], date_is_valid: Callable[[date], bool],
+        calendar_name: str, date_scope_name: str,
+    ) -> SearchResult:
+        if response.get("success") is False or response.get("failure") is True:
+            # The remote message is neither needed to choose this narrow
+            # fallback nor safe to echo without a documented size/format.
+            raise _CalendarServiceRejected("飞猪国际最低价日历明确拒绝本次请求")
+        if response.get("success") is not True:
+            raise ProviderError("飞猪国际最低价日历缺少明确成功状态")
+        rows = response.get("result")
+        if not isinstance(rows, list):
+            raise ProviderError("飞猪国际最低价日历字段发生变化")
+        by_day: dict[date, Quote] = {}
+        seen: set[date] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ProviderError("飞猪国际最低价日历包含无效条目")
+            if row.get("depCityCode") != route.origin or row.get("arrCityCode") != route.destination:
+                raise ProviderError("飞猪国际最低价日历城市与所选城市不一致")
+            raw_day = row.get("leaveDate")
+            try:
+                departure = date.fromisoformat(raw_day) if isinstance(raw_day, str) else None
+            except ValueError:
+                departure = None
+            if departure is None or not date_is_valid(departure):
+                raise ProviderError(f"飞猪国际最低价日历日期与请求{date_scope_name}不一致")
+            if departure in seen:
+                raise ProviderError("飞猪国际最低价日历返回重复日期")
+            seen.add(departure)
+            fare = _amount(row.get("price"), "国际成人票价 price")
+            tax = _amount(row.get("tax"), "国际税费 tax")
+            raw_url = row.get("url")
+            if not isinstance(raw_url, str) or not raw_url.strip():
+                raise ProviderError("飞猪国际最低价日历缺少购票链接")
+            link = "https:" + raw_url if raw_url.startswith("//") else raw_url
+            parsed = urllib.parse.urlsplit(link)
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+            def one_of(*names: str) -> str | None:
+                values = []
+                for name in names:
+                    values.extend(query.get(name, []))
+                return values[0] if len(values) == 1 else None
+
+            if (parsed.scheme != "https" or parsed.hostname != "sijipiao.fliggy.com"
+                    or parsed.path != "/ie/flight_search_result.htm"
+                    or one_of("depCityCode", "depCity") != route.origin
+                    or one_of("arrCityCode", "arrCity") != route.destination
+                    or one_of("depDate") != departure.isoformat()
+                    or one_of("tripType") != "0"):
+                raise ProviderError("飞猪国际最低价日历购票链接与路线或日期不一致")
+            if departure not in wanted or fare == 0:
+                continue
+            total = fare + tax
+            if total <= 0:
+                continue
+            by_day[departure] = Quote(
+                origin=route.origin, destination=route.destination,
+                departure_date=departure, price=total, currency="CNY",
+                source="飞猪国际最低价日历", url=self._booking_url(route, departure),
+                provider="fliggy", price_basis="total",
+                price_note=(f"飞猪官网{calendar_name}最低价日历参考总价：票价 {fare} + 税费 {tax} 元；"
+                            "日历接口不返回具体航班、会员限制或行李条件，"
+                            "最终可售价格请到飞猪国际机票页确认"),
+            )
+        warnings = [
+            f"{day} 飞猪国际最低价日历暂无正数报价，不能据此判断售罄"
+            for day in sorted(wanted - set(by_day))
+        ]
+        return SearchResult([by_day[day] for day in sorted(by_day)], warnings)
 
     def _parse(self, response: dict, route: Route, day: date) -> SearchResult:
         if response.get("errorMsg") or response.get("success") is False:

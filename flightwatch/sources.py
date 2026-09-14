@@ -12,9 +12,9 @@ from .models import ConfigError, ProviderError, ProviderUnsupported, Route, Sear
 
 PROVIDERS = (
     {"id": "ctrip", "name": "携程", "group": "国内旅行平台", "description": "国内/国际低价日历参考总价"},
-    {"id": "tongcheng", "name": "同程", "group": "国内旅行平台", "description": "国内含税参考价；国际可按所选路线和日期直达官网核价"},
+    {"id": "tongcheng", "name": "同程", "group": "国内旅行平台", "description": "国内航班含税参考价；国际 1 成人单程含税低价日历"},
     {"id": "qunar", "name": "去哪儿", "group": "国内旅行平台", "description": "国内/国际公开低价日历；国内未含税价单独展示"},
-    {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "国内普通成人含税价；国际可按所选路线和日期直达官网核价"},
+    {"id": "fliggy", "name": "飞猪", "group": "国内旅行平台", "description": "国内普通成人含税价；国际 1 成人单程含税低价日历"},
     {"id": "google_flights", "name": "Google Flights", "group": "海外旅行平台", "description": "逐日搜索，1 成人经济舱单程含税参考价"},
     {"id": "kiwi", "name": "Kiwi.com", "group": "海外旅行平台", "description": "公开单程优惠，日期覆盖有限、票价口径未确认，仅供参考"},
     {"id": "ryanair", "name": "瑞安航空 Ryanair", "group": "航空公司官网", "description": "海外自营航线日历，外币折算并显示原价；税费未确认，仅供参考"},
@@ -86,8 +86,12 @@ def additional_platform_links(route: Route, day: date) -> list[dict[str, str]]:
 def estimate_requests(name, route, days):
     if not days:
         return 0
-    if name in {"tongcheng", "fliggy"} and route.market != "domestic":
-        return 0
+    if name == "tongcheng" and route.market != "domestic":
+        # The international calendar returns the next 91 days in one response.
+        return 1
+    if name == "fliggy" and route.market != "domestic":
+        # One international calendar request covers one natural month.
+        return len({(day.year, day.month) for day in days})
     if name == "ctrip":
         return 1
     if name == "qunar":
@@ -201,7 +205,10 @@ class MultiSourceProvider:
             return [], [report["message"]], report
 
         quotes, warnings, reports = [], [], []
-        with ThreadPoolExecutor(max_workers=min(4, len(names)), thread_name_prefix="fare-source") as pool:
+        # The list is bounded by DEFAULT_SOURCES. Each independent platform
+        # manages its own request pacing, so queueing selected platforms here
+        # only adds avoidable wall-clock time.
+        with ThreadPoolExecutor(max_workers=len(names), thread_name_prefix="fare-source") as pool:
             # map preserves selected provider order despite parallel requests.
             try:
                 for name, (items, notes, report) in zip(names, pool.map(query, names)):

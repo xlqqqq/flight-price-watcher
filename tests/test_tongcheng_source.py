@@ -16,6 +16,11 @@ from flightwatch.tongcheng_source import TongchengProvider, parse_nuxt_state
 
 DAY = date(2026, 9, 22)
 ROUTE = Route("bjs-sha", "北京到上海", "BJS", "SHA", "multi", dates=(DAY,))
+INTL_DAY = date(2026, 10, 1)
+INTL_ROUTE = Route(
+    "sha-tyo", "上海到东京", "SHA", "TYO", "multi",
+    dates=(INTL_DAY,), market="international",
+)
 
 
 def flight(**changes):
@@ -37,6 +42,20 @@ def state(rows=None, **changes):
 
 def page(data):
     return '<html><script>window.__NUXT__=(function(){return ' + json.dumps(data) + '}());</script></html>'
+
+
+def international_row(day=INTL_DAY, **changes):
+    row = dict(DD=day.isoformat(), RD="", P="361", TP="904", ML="1", ML2="1", PIndex=0,
+               ext=dict(segments=[], goSpanDays=None, backSpanDays=None, tripId=None))
+    row.update(changes)
+    return row
+
+
+def international_calendar(rows=None, **changes):
+    payload = dict(R="0", E="成功", LP="361", TP="904",
+                   RD=[international_row()] if rows is None else rows)
+    payload.update(changes)
+    return dict(code=200, data=payload, g="1789354023347-90415")
 
 
 class NuxtParserTests(unittest.TestCase):
@@ -161,6 +180,68 @@ class TongchengPriceTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ProviderError):
                 self.provider._parse(data, ROUTE, DAY)
 
+    def test_international_uses_exact_dates_and_total_price(self):
+        other = international_row(date(2026, 10, 2), P="99", TP="500")
+        result = self.provider._parse_international(
+            international_calendar([other, international_row()]), INTL_ROUTE, {INTL_DAY})
+        self.assertEqual(len(result.quotes), 1)
+        quote = result.quotes[0]
+        self.assertEqual(quote.departure_date, INTL_DAY)
+        self.assertEqual(quote.price, Decimal("904"))
+        self.assertEqual(quote.price_basis, "total")
+        self.assertTrue(quote.comparable)
+        self.assertEqual(quote.provider, "tongcheng")
+        self.assertIn("销售价 P=361", quote.price_note)
+        self.assertIn("总价 TP=904", quote.price_note)
+        self.assertIn("响应不回显航线", quote.price_note)
+        self.assertIn("SHA%2ATYO%2A2026-10-01", quote.url)
+        self.assertTrue(any("低价日历缓存" in warning for warning in result.warnings))
+
+    def test_international_global_lowest_is_never_used_for_missing_date(self):
+        wanted = {date(2027, 1, 1)}
+        result = self.provider._parse_international(
+            international_calendar(), INTL_ROUTE, wanted)
+        self.assertFalse(result.quotes)
+        self.assertIn("1 个所选日期", result.warnings[-1])
+        self.assertIn("90 天", result.warnings[-1])
+
+    def test_international_rejects_failure_and_schema_changes(self):
+        invalid = [
+            {},
+            {"code": 444, "message": "非法链接"},
+            international_calendar(R="1"),
+            international_calendar(rows={}),
+            international_calendar(rows=[None]),
+            international_calendar(LP=None),
+            international_calendar(TP="NaN"),
+        ]
+        for data in invalid:
+            with self.subTest(data=data), self.assertRaises(ProviderError):
+                self.provider._parse_international(data, INTL_ROUTE, {INTL_DAY})
+
+    def test_international_rejects_ambiguous_or_invalid_dated_prices(self):
+        invalid_rows = [
+            [international_row(), international_row()],
+            [international_row(DD="20261001")],
+            [international_row(DD="2026-02-30")],
+            [international_row(RD="2026-10-08")],
+            [international_row(P=True)],
+            [international_row(P="500", TP="499")],
+            [international_row(TP="Infinity")],
+            [international_row(TP="-1")],
+        ]
+        for rows in invalid_rows:
+            with self.subTest(rows=rows), self.assertRaises(ProviderError):
+                self.provider._parse_international(
+                    international_calendar(rows), INTL_ROUTE, {INTL_DAY})
+
+    def test_international_zero_total_is_missing_not_a_free_flight(self):
+        result = self.provider._parse_international(
+            international_calendar([international_row(P="0", TP="0")]),
+            INTL_ROUTE, {INTL_DAY})
+        self.assertFalse(result.quotes)
+        self.assertTrue(any("暂无有效总价" in warning for warning in result.warnings))
+
 
 class TongchengTransportTests(unittest.TestCase):
     def test_reused_provider_uses_current_cancellation_callback(self):
@@ -174,12 +255,75 @@ class TongchengTransportTests(unittest.TestCase):
 
     def test_unsupported_filters_make_no_network_request(self):
         provider = TongchengProvider()
-        for changes in (dict(market="international"), dict(currency="USD"),
+        for changes in (dict(market="unknown"), dict(currency="USD"),
                         dict(stay_nights=7), dict(travel_class=2), dict(nonstop=True)):
             with self.subTest(changes=changes), patch.object(provider, "_request") as request:
                 with self.assertRaises(ProviderUnsupported):
                     provider.search(replace(ROUTE, **changes), DAY)
                 request.assert_not_called()
+
+    def test_international_search_uses_one_calendar_request_for_many_dates(self):
+        provider = TongchengProvider(request_delay=0)
+        second = date(2026, 10, 2)
+        route = replace(INTL_ROUTE, dates=(INTL_DAY, second))
+        data = international_calendar([
+            international_row(), international_row(second, P="300", TP="700")])
+        with patch.object(provider, "_request_international_calendar", return_value=data) as request:
+            result = provider.search(route, INTL_DAY)
+        request.assert_called_once_with(route, INTL_DAY)
+        self.assertEqual([quote.price for quote in result.quotes],
+                         [Decimal("904"), Decimal("700")])
+
+    def test_international_transport_is_anonymous_and_carries_exact_route(self):
+        provider = TongchengProvider(request_delay=0)
+        response = MagicMock()
+        opened = response.__enter__.return_value
+        opened.url = (
+            "https://www.ly.com/miflightapi/ts/calendar?"
+            "D=SHA&A=TYO&DD=2026-10-01&AD=&TT=OW&ST=1"
+        )
+        opened.headers = {"Content-Type": "application/json; charset=utf-8"}
+        opened.read.return_value = json.dumps(international_calendar()).encode()
+        with patch("flightwatch.tongcheng_source.urllib.request.urlopen", return_value=response) as open_url:
+            result = provider.search(INTL_ROUTE, INTL_DAY)
+        self.assertEqual(result.quotes[0].price, Decimal("904"))
+        request = open_url.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://www.ly.com/miflightapi/ts/calendar?"
+            "D=SHA&A=TYO&DD=2026-10-01&AD=&TT=OW&ST=1",
+        )
+        self.assertEqual(request.get_header("Pc-token"), "1")
+        self.assertEqual(request.get_header("T-token"), "1")
+        self.assertIn("SHA%2ATYO%2A2026-10-01", request.get_header("Referer"))
+        self.assertIsNone(request.get_header("Cookie"))
+        self.assertIsNone(request.get_header("User-dun"))
+
+    def test_international_transport_rejects_redirect_wrong_mime_and_non_json_constants(self):
+        valid_url = (
+            "https://www.ly.com/miflightapi/ts/calendar?"
+            "D=SHA&A=TYO&DD=2026-10-01&AD=&TT=OW&ST=1"
+        )
+        cases = [
+            ("https://example.com/miflightapi/ts/calendar", "application/json", "{}"),
+            (valid_url.replace("D=SHA", "D=CAN"), "application/json",
+             json.dumps(international_calendar())),
+            (valid_url + "&D=SHA", "application/json",
+             json.dumps(international_calendar())),
+            (valid_url, "text/html", json.dumps(international_calendar())),
+            (valid_url, "application/json", '{"code":200,"data":{"R":"0"},"unused":NaN}'),
+        ]
+        for final_url, content_type, body in cases:
+            response = MagicMock()
+            opened = response.__enter__.return_value
+            opened.url = final_url
+            opened.headers = {"Content-Type": content_type}
+            opened.read.return_value = body.encode()
+            with self.subTest(final_url=final_url, content_type=content_type, body=body), \
+                    patch("flightwatch.tongcheng_source.urllib.request.urlopen", return_value=response), \
+                    self.assertRaises(ProviderError):
+                TongchengProvider(request_delay=0)._request_international_calendar(
+                    INTL_ROUTE, INTL_DAY)
 
     def test_query_uses_one_get_per_day_and_exposes_subset_warning(self):
         provider = TongchengProvider(request_delay=0)

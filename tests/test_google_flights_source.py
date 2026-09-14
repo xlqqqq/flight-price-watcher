@@ -4,16 +4,19 @@ import copy
 import io
 import json
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
 from flightwatch.google_flights_source import GoogleFlightsProvider, ENDPOINT
-from flightwatch.models import ProviderError, ProviderUnsupported, Route
+from flightwatch.models import ProviderError, ProviderUnsupported, Route, SearchResult
 
 
 DAY = date(2026, 9, 29)
@@ -241,6 +244,128 @@ class GoogleRequestTests(unittest.TestCase):
         provider = GoogleFlightsProvider()
         with patch.object(provider, "_request", side_effect=ProviderError("网络失败")), self.assertRaisesRegex(ProviderError, "网络失败"):
             provider.search(ROUTE, TODAY)
+
+    def test_remaining_dates_overlap_after_successful_first_day_probe(self):
+        days = tuple(DAY + timedelta(days=index) for index in range(5))
+        route = replace(ROUTE, dates=days)
+        provider = GoogleFlightsProvider(request_delay=0)
+        barrier = threading.Barrier(4, timeout=2)
+        lock = threading.Lock()
+        calls = 0
+
+        def request(_url):
+            nonlocal calls
+            with lock:
+                calls += 1
+                current = calls
+            if current > 1:
+                barrier.wait()
+            return "page"
+
+        with patch.object(provider, "_request", side_effect=request), \
+                patch.object(provider, "_parse_page", return_value=SearchResult([], [])):
+            result = provider.search(route, TODAY)
+        self.assertEqual(calls, 5)
+        self.assertEqual(result.quotes, [])
+
+    def test_parallel_completion_keeps_date_order_in_messages(self):
+        days = tuple(DAY + timedelta(days=index) for index in range(4))
+        route = replace(ROUTE, dates=days)
+        provider = GoogleFlightsProvider(request_delay=0)
+
+        def parse(_page, _route, departure, _url):
+            time.sleep((days[-1] - departure).days * 0.01)
+            return SearchResult([], [f"完成 {departure.isoformat()}"])
+
+        with patch.object(provider, "_request", return_value="page"), \
+                patch.object(provider, "_parse_page", side_effect=parse):
+            result = provider.search(route, TODAY)
+        self.assertEqual(result.warnings[:4], [f"完成 {day.isoformat()}" for day in days])
+
+    def test_download_time_does_not_hold_request_spacing_lock(self):
+        provider = GoogleFlightsProvider(request_delay=0)
+        barrier = threading.Barrier(2, timeout=2)
+
+        class Response:
+            url = ENDPOINT
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                barrier.wait()
+                return b"ok"
+
+        with patch("urllib.request.urlopen", side_effect=lambda *_args, **_kwargs: Response()):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pages = list(pool.map(provider._request, [ENDPOINT, ENDPOINT]))
+        self.assertEqual(pages, ["ok", "ok"])
+        self.assertEqual(provider.requests_used, 2)
+
+    def test_parallel_request_starts_keep_configured_spacing(self):
+        provider = GoogleFlightsProvider(request_delay=0.04)
+        starts = []
+        lock = threading.Lock()
+
+        class Response:
+            url = ENDPOINT
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return b"ok"
+
+        def open_page(*_args, **_kwargs):
+            with lock:
+                starts.append(time.monotonic())
+            return Response()
+
+        with patch("urllib.request.urlopen", side_effect=open_page):
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                list(pool.map(provider._request, [ENDPOINT] * 3))
+        starts.sort()
+        self.assertTrue(all(right - left >= 0.03 for left, right in zip(starts, starts[1:])))
+
+    def test_later_access_block_cancels_dates_waiting_for_request_slot(self):
+        days = tuple(DAY + timedelta(days=index) for index in range(8))
+        route = replace(ROUTE, dates=days)
+        provider = GoogleFlightsProvider(request_delay=0.04)
+        calls = 0
+        lock = threading.Lock()
+
+        class Response:
+            url = ENDPOINT
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return b"page"
+
+        def open_page(*_args, **_kwargs):
+            nonlocal calls
+            with lock:
+                calls += 1
+                current = calls
+            if current == 2:
+                raise HTTPError(ENDPOINT, 429, "blocked", {}, io.BytesIO())
+            return Response()
+
+        with patch("urllib.request.urlopen", side_effect=open_page), \
+                patch.object(provider, "_parse_page", return_value=SearchResult([], [])), \
+                self.assertRaisesRegex(ProviderError, "HTTP 429"):
+            provider.search(route, TODAY)
+        self.assertEqual(calls, 2)
 
 
 if __name__ == "__main__":
