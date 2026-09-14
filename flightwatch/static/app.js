@@ -14,6 +14,7 @@
     notificationSignature: "",
     cityCatalog: new Map(),
     cityPickers: {},
+    airportLoads: new Map(),
     trips: [],
   };
   const MAX_TRIPS = 10;
@@ -126,6 +127,74 @@
         city.airport_name, city.pinyin, city.en_name, ...(Array.isArray(city.aliases) ? city.aliases : [])];
       return searchable.some((value) => String(value || "").toLowerCase().includes(normalized));
     }).slice(0, 20);
+  }
+
+  function airportChoices(place) {
+    const owner = place.city_code;
+    let city = state.cityCatalog.get(`city:${owner}:${owner}`);
+    if (!city) {
+      city = mergeCities([{ scope: "city", code: owner, city_code: owner,
+        name: place.city_name || owner, city_name: place.city_name || owner,
+        market: place.market, country: place.country }])[0];
+    }
+    const airports = Array.from(state.cityCatalog.values())
+      .filter((item) => item.scope === "airport" && item.city_code === owner)
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+    return [city, ...airports];
+  }
+
+  async function loadCityAirports(place) {
+    const owner = place.city_code;
+    const load = { status: "loading" };
+    state.airportLoads.set(owner, load);
+    try {
+      // City names avoid city/airport code collisions such as SHA/Hongqiao.
+      const city = state.cityCatalog.get(`city:${owner}:${owner}`);
+      const query = city?.city_name || city?.name || owner;
+      const data = await request(`/api/cities?q=${encodeURIComponent(query)}`);
+      const selected = ["origin", "destination"].map((id) => [id, selectedPlace($(id))]);
+      const rows = mergeCities((data.cities || []).filter((item) =>
+        (item.city_code || item.code) === owner));
+      // Refresh labels without changing the selected place or airport scope.
+      for (const [id, prior] of selected) {
+        if (prior) $(id).value = cityLabel(state.cityCatalog.get(placeIdentity(prior)));
+      }
+      load.status = "loaded";
+      load.warning = data.warning || (rows.some((item) => item.scope === "airport")
+        ? "" : "暂未取得该城市的机场列表，可在上方直接搜索机场名称或代码。");
+    } catch (error) {
+      load.status = "error";
+      load.warning = `${error.message} 已保留当前机场范围，可重试或直接搜索机场。`;
+    }
+    syncAirportSelectors();
+  }
+
+  function syncAirportSelectors() {
+    for (const id of ["origin", "destination"]) {
+      const place = selectedPlace($(id)) || cityFor($(id).value);
+      $(`${id}-airport-field`).hidden = !place;
+      if (!place) continue;
+      const choices = airportChoices(place);
+      const select = $(`${id}-airport`);
+      select.replaceChildren(...choices.map((item) => {
+        const option = element("option", "", item.scope === "city"
+          ? `${item.city_name || item.name} · 全部机场`
+          : `${item.name}（${item.code}）`);
+        option.value = placeIdentity(item);
+        return option;
+      }));
+      select.value = placeIdentity(place);
+      let load = state.airportLoads.get(place.city_code);
+      if (!load) {
+        loadCityAirports(place);
+        load = state.airportLoads.get(place.city_code);
+      }
+      $(`${id}-airport-hint`).textContent = load.status === "loading"
+        ? "正在加载该城市的机场，当前选择保持不变…"
+        : load.warning || (place.scope === "airport"
+          ? `仅查询 ${place.name}（${place.code}）` : "比较该城市全部机场的航班");
+      $(`${id}-airport-retry`).hidden = !load.warning;
+    }
   }
 
   function createCityPicker(id) {
@@ -250,7 +319,7 @@
         const displayed = cities.length ? cities : fallback;
         const message = data.warning
           ? `${data.warning}${fallback.length && !cities.length ? "；下方为本地匹配城市。" : ""}`
-          : displayed.length ? `找到 ${displayed.length} 个城市，请点击选择` : "暂未找到匹配城市，请换一个中文名、拼音或英文名重试。";
+          : displayed.length ? `找到 ${displayed.length} 个城市或机场，请点击选择` : "暂未找到匹配地点，请换一个城市名、机场名或代码重试。";
         render(displayed, message, Boolean(data.warning));
       } catch (error) {
         if (currentGeneration !== generation || document.activeElement !== input) return;
@@ -277,12 +346,13 @@
       selectOnClick = true;
       if (input.value) input.select();
       const selected = selectedPlace(input) || cityFor(input.value);
-      openSearch(selected ? "" : input.value.trim());
+      openSearch(selected ? selected.city_name || selected.city_code : input.value.trim());
     });
     input.addEventListener("click", () => {
       if (selectOnClick && input.value) input.select();
       selectOnClick = false;
-      if (popup.hidden) openSearch((selectedPlace(input) || cityFor(input.value)) ? "" : input.value.trim());
+      const selected = selectedPlace(input) || cityFor(input.value);
+      if (popup.hidden) openSearch(selected ? selected.city_name || selected.city_code : input.value.trim());
     });
     input.addEventListener("input", () => {
       delete input.dataset.placeIdentity;
@@ -297,7 +367,8 @@
       if (composing || event.isComposing) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        if (popup.hidden) openSearch((selectedPlace(input) || cityFor(input.value)) ? "" : input.value.trim());
+        const selected = selectedPlace(input) || cityFor(input.value);
+        if (popup.hidden) openSearch(selected ? selected.city_name || selected.city_code : input.value.trim());
         if (options.length) markActive(event.key === "ArrowDown" ? (active + 1) % options.length : (active < 0 ? options.length - 1 : (active - 1 + options.length) % options.length));
       } else if (event.key === "Enter" && !popup.hidden) {
         event.preventDefault();
@@ -332,6 +403,7 @@
   }
 
   function detectMarket() {
+    syncAirportSelectors();
     const origin = selectedPlace($("origin")) || cityFor($("origin").value);
     const destination = selectedPlace($("destination")) || cityFor($("destination").value);
     if ($("market").value !== "auto") {
@@ -1148,6 +1220,25 @@
       $("connection-error").hidden = false;
       $("channel-status").textContent = "本地服务尚未连接";
     }
+  }
+
+  for (const id of ["origin", "destination"]) {
+    $(`${id}-airport`).addEventListener("change", (event) => {
+      const place = state.cityCatalog.get(event.target.value);
+      if (!place) return;
+      $(id).value = cityLabel(place);
+      $(id).dataset.placeIdentity = placeIdentity(place);
+      state.cityPickers[id].close();
+      state.cityPickers[id].syncClear();
+      formError("");
+      detectMarket();
+    });
+    $(`${id}-airport-retry`).addEventListener("click", () => {
+      const place = selectedPlace($(id));
+      if (!place) return;
+      state.airportLoads.delete(place.city_code);
+      syncAirportSelectors();
+    });
   }
 
   $("watch-form").addEventListener("submit", async (event) => {

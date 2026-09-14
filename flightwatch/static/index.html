@@ -37,14 +37,16 @@
                   <div class="field city-field" id="origin-field">
                     <label for="origin">出发地</label>
                     <div class="city-input-wrap"><input id="origin" name="origin" placeholder="搜索城市，如昆明 / kunming" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="origin-options" aria-expanded="false" aria-describedby="origin-hint" required><button type="button" id="origin-clear" class="city-clear" aria-label="清空出发地" title="清空并重新选择出发地" hidden>×</button></div>
-                    <span id="origin-hint" class="field-hint">点击可改，支持中文 / 拼音 / 代码</span>
+                    <span id="origin-hint" class="field-hint">搜索城市或机场，再选择机场范围</span>
+                    <div id="origin-airport-field" class="airport-scope-field" hidden><label for="origin-airport">出发机场范围</label><select id="origin-airport" aria-describedby="origin-airport-hint"></select><span id="origin-airport-hint" class="field-hint" role="status"></span><button type="button" id="origin-airport-retry" class="text-button" hidden>重新加载机场</button></div>
                     <div id="origin-popup" class="city-popup" hidden><div id="origin-search-status" class="city-search-status" role="status" aria-live="polite"></div><ul id="origin-options" class="city-options" role="listbox" aria-label="出发城市搜索结果"></ul></div>
                   </div>
                   <button type="button" id="swap-cities" class="swap-button" title="交换出发地和目的地" aria-label="交换出发地和目的地">⇄</button>
                   <div class="field city-field" id="destination-field">
                     <label for="destination">目的地</label>
                     <div class="city-input-wrap"><input id="destination" name="destination" placeholder="搜索城市，如大阪 / osaka" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-controls="destination-options" aria-expanded="false" aria-describedby="destination-hint" required><button type="button" id="destination-clear" class="city-clear" aria-label="清空目的地" title="清空并重新选择目的地" hidden>×</button></div>
-                    <span id="destination-hint" class="field-hint">国内和国际城市都可以搜索</span>
+                    <span id="destination-hint" class="field-hint">国内外均可选全部机场或具体机场</span>
+                    <div id="destination-airport-field" class="airport-scope-field" hidden><label for="destination-airport">到达机场范围</label><select id="destination-airport" aria-describedby="destination-airport-hint"></select><span id="destination-airport-hint" class="field-hint" role="status"></span><button type="button" id="destination-airport-retry" class="text-button" hidden>重新加载机场</button></div>
                     <div id="destination-popup" class="city-popup" hidden><div id="destination-search-status" class="city-search-status" role="status" aria-live="polite"></div><ul id="destination-options" class="city-options" role="listbox" aria-label="目的城市搜索结果"></ul></div>
                   </div>
                 </div>
