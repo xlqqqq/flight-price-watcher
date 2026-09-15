@@ -71,6 +71,23 @@ class MultiTripTests(unittest.TestCase):
             self.assertIn("SHA → SEL", content)
             self.assertNotIn("SHA → TYO", content)
 
+    def test_miniprogram_injected_sender_receives_each_route_and_preserves_delivery_state(self):
+        from unittest.mock import Mock
+        sender = Mock()
+        sender.send_quote.return_value = "accepted:mini:test"
+        self.app = Dashboard(self.directory, alert_notifier=sender)
+        self.form["notify"] = "browser"
+        with patch("flightwatch.webapp.MultiSourceProvider") as provider:
+            provider.return_value.search.side_effect = self.fares
+            self.query()
+            self.assertEqual(sender.send_quote.call_count, 2)
+            self.assertEqual({call.args[2].destination for call in sender.send_quote.call_args_list},
+                             {"TYO", "SEL"})
+            self.assertTrue(all(n["channel"] == "miniprogram" for n in self.app.notifications))
+            self.app = Dashboard(self.directory, alert_notifier=sender)
+            self.query()
+            self.assertEqual(sender.send_quote.call_count, 2)
+
     def test_failed_trip_does_not_block_other_trip_and_recovers(self):
         self.failed.add("TYO")
         with patch("flightwatch.webapp.MultiSourceProvider") as provider, \

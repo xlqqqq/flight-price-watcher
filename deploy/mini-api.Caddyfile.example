@@ -1,0 +1,8 @@
+# Replace with your own domain pointing to this server. Caddy manages HTTPS.
+# Proxy only port 8766. Do not expose the desktop dashboard on port 8765.
+mini-api.example.com {
+    request_body {
+        max_size 16KB
+    }
+    reverse_proxy 127.0.0.1:8766
+}

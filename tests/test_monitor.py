@@ -122,6 +122,26 @@ class MonitorIntegrationTests(unittest.TestCase):
         stored = self.state.connection.execute("SELECT receipt FROM alerts").fetchone()
         self.assertEqual(stored[0], "accepted-receipt-123")
 
+    def test_small_miniprogram_messages_split_routes_and_only_acknowledged_one_is_marked(self):
+        first = self.route
+        second = replace(first, id="second-trip", destination="CAN", name="北京广州")
+        settings = replace(self.settings, routes=(first, second))
+        self.source.search.side_effect = lambda route, today: SearchResult([quote("800", route)], [])
+        class SubscriptionNotifier:
+            single_route_messages = True
+            def __init__(self): self.routes = []
+            def send_quote(self, title, content, route, fare):
+                self.routes.append(route.id)
+                if route.id == second.id:
+                    raise NotificationError("订阅次数已用完")
+                return "accepted:mini:first"
+        sender = SubscriptionNotifier()
+        result = run_cycle(settings, {"serpapi":self.source}, self.state, sender, now=NOW)
+        self.assertEqual(result, 1)
+        self.assertEqual(sender.routes, [first.id, second.id])
+        self.assertIsNotNone(self.state.last_alert(first.state_key(), "threshold"))
+        self.assertIsNone(self.state.last_alert(second.state_key(), "threshold"))
+
     def test_successful_alert_is_suppressed_after_database_reopen(self):
         self.assertEqual(self.run_cycle(), 0)
         self.reopen()

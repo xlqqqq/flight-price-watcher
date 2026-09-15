@@ -1,0 +1,52 @@
+<view class="page">
+  <view class="hero"><text class="title">机票降价提醒</text><text class="muted">选择行程，在微信里接收价格提醒</text></view>
+  <view wx:if="{{error}}" class="notice error">{{error}}</view>
+  <view wx:if="{{!logged}}" class="card">
+    <text class="heading">绑定自己的微信</text><text class="muted">首次使用填写服务器生成的绑定码。绑定后，同一微信登录无需再填。</text>
+    <input password placeholder="首次绑定码" value="{{pairing}}" bindinput="pairingInput"/>
+    <button type="primary" loading="{{busy}}" bindtap="login">微信登录并绑定</button>
+  </view>
+  <block wx:else>
+    <view class="card">
+      <text class="heading">{{editing >= 0 ? '编辑行程' : '添加行程'}}</text>
+      <button data-side="origin" bindtap="pick" disabled="{{monitor.running}}">{{form.origin_label || '选择出发城市或机场'}}</button>
+      <button data-side="destination" bindtap="pick" disabled="{{monitor.running}}">{{form.destination_label || '选择目的城市或机场'}}</button>
+      <text class="muted">{{form.market === 'domestic' ? '国内航线' : '国际 / 港澳台航线'}} · 1 成人单程</text>
+      <picker range="{{['国内','国际 / 港澳台']}}" value="{{form.market === 'domestic' ? 0 : 1}}" bindchange="market"><view class="input">调整航线类型</view></picker>
+      <view class="row"><picker mode="date" value="{{form.start_date}}" start="{{today}}" end="{{maxDate}}" data-field="start_date" bindchange="field"><view class="input">起始：{{form.start_date}}</view></picker>
+      <picker mode="date" value="{{form.end_date}}" start="{{form.start_date}}" end="{{maxDate}}" data-field="end_date" bindchange="field"><view class="input">结束：{{form.end_date}}</view></picker></view>
+      <text class="muted">监控某一天：两个日期选同一天。日期范围最多 31 天。</text>
+      <picker range="{{modes}}" value="{{modeIndex}}" bindchange="mode"><view class="input">{{modes[modeIndex]}}</view></picker>
+      <input type="digit" placeholder="目标价（元）" value="{{form.threshold}}" data-field="threshold" bindinput="field"/>
+      <checkbox-group bindchange="providers"><label wx:for="{{providerChoices}}" wx:key="id" class="provider"><checkbox value="{{item.id}}" checked="{{item.checked}}"/>{{item.name}}</label></checkbox-group>
+      <button type="primary" bindtap="addTrip" disabled="{{monitor.running}}">{{editing >= 0 ? '保存到行程清单' : '加入行程清单'}}</button>
+    </view>
+    <view class="card">
+      <text class="heading">我的行程 · {{trips.length}} / 10</text>
+      <view wx:for="{{trips}}" wx:key="index" class="trip"><text>{{item.origin_label}} → {{item.destination_label}}</text><text class="muted">{{item.start_date}} 至 {{item.end_date}} · 目标 ¥{{item.threshold}}</text>
+        <view class="row"><button size="mini" data-index="{{index}}" bindtap="editTrip" disabled="{{monitor.running}}">编辑</button><button size="mini" data-index="{{index}}" bindtap="removeTrip" disabled="{{monitor.running}}">删除</button></view></view>
+      <text class="muted">查询间隔（分钟，最少 10；属于定时查询）</text><input type="number" value="{{interval}}" bindinput="intervalInput"/>
+      <view class="row"><button data-action="save" bindtap="action" disabled="{{busy || monitor.running}}">保存清单</button><button data-action="search" bindtap="action" disabled="{{busy || searchBusy}}">立即查询</button></view>
+    </view>
+    <view class="card">
+      <text class="heading">微信订阅提醒</text><text class="muted">{{subscriptionNote}}</text>
+      <text class="notice">{{subscription === 'accepted' ? '已提交授权；实际可发送次数以微信为准' : '需要订阅授权，或上次授权次数已用完'}}</text>
+      <button bindtap="subscribe">订阅一条提醒</button>
+      <view class="row"><button type="primary" data-action="start" bindtap="action" disabled="{{busy || monitor.running || searchBusy}}">监控全部行程</button><button data-action="stop" bindtap="action" disabled="{{!monitor.running}}">停止监控</button></view>
+      <text class="muted">{{monitor.running ? '后台监控运行中，退出小程序后服务器会继续查询' : '监控未运行'}}</text>
+      <text wx:if="{{monitor.next_run_at}}" class="muted">下次查询：{{monitor.next_run_at}}</text>
+      <text wx:if="{{monitor.last_error}}" class="error">{{monitor.last_error}}</text>
+    </view>
+    <view class="card"><text class="heading">行程最低参考总价 {{searchBusy ? '· 查询中' : ''}}</text>
+      <text wx:if="{{!results.length}}" class="muted">添加行程后点击立即查询。</text>
+      <view wx:for="{{results}}" wx:for-item="trip" wx:key="route_id" class="trip">
+        <text>{{trip.name}}</text><text wx:if="{{trip.best}}" class="price">¥{{trip.best.price}} · {{trip.best.source}}</text>
+        <text wx:else class="muted">暂未取得可比的含税价格</text>
+        <view wx:for="{{trip.daily}}" wx:for-item="quote" wx:key="departure_date" class="fare"><text>{{quote.departure_date}}　¥{{quote.price}}</text><text class="muted">{{quote.source}} · {{quote.flight_number}}　{{quote.origin_airport}} → {{quote.destination_airport}}</text><button wx:if="{{quote.url}}" size="mini" data-url="{{quote.url}}" bindtap="copy">复制购票链接</button></view>
+        <button size="mini" bindtap="toggleSources">{{sourceDetails ? '收起平台详情' : '查看平台详情'}}</button>
+        <view wx:if="{{sourceDetails}}" wx:for="{{trip.sources}}" wx:for-item="source" wx:key="id" class="fare"><text>{{source.name}} · {{source.label}}</text><text class="muted">{{source.message}}</text></view>
+      </view><text class="muted">仅比较本次查到且条件一致的含税参考价，最终价格以购票平台为准。</text>
+    </view>
+  </block>
+  <view wx:if="{{pickerSide}}" class="overlay"><view class="card picker"><view class="row"><text class="heading">选择城市或具体机场</text><button size="mini" bindtap="closePicker">关闭</button></view><input focus placeholder="输入中文、拼音或三字码，例如 上海 / PVG" value="{{placeQuery}}" bindinput="searchPlace"/><scroll-view scroll-y class="places"><view wx:for="{{places}}" wx:key="index" class="place" data-index="{{index}}" bindtap="choosePlace">{{item.label}}</view></scroll-view><text class="muted">“全部机场”和具体机场会分别列出；不会自动替换成附近机场。</text></view></view>
+</view>

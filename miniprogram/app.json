@@ -1,0 +1,6 @@
+{
+  "pages": ["pages/index/index", "pages/detail/index"],
+  "window": {"navigationBarTitleText": "机票降价提醒", "navigationBarBackgroundColor": "#f4f7fb", "navigationBarTextStyle": "black", "backgroundColor": "#f4f7fb"},
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

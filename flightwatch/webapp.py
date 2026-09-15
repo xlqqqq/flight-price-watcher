@@ -316,9 +316,10 @@ def _combined_snapshot(form: dict, trips: list[dict], queried_at: str) -> dict:
 
 
 class Dashboard:
-    def __init__(self, data_dir: Path | None = None):
+    def __init__(self, data_dir: Path | None = None, *, alert_notifier=None):
         from .serverchan_binding import ServerChanBinding
         self.data_dir = data_dir or ROOT / "data"
+        self.alert_notifier = alert_notifier
         self.lock = threading.RLock()
         self.search_busy = False
         self.operation_id = None
@@ -568,6 +569,20 @@ class Dashboard:
                             raise result
                         return result
                 class Notifier:
+                    single_route_messages = app.alert_notifier is not None
+
+                    def send_quote(self, title, content, route, quote):
+                        if event.is_set():
+                            raise NotificationError("监控已停止，本次提醒取消")
+                        try:
+                            receipt = app.alert_notifier.send_quote(title, content, route, quote)
+                        except NotificationError as exc:
+                            with app.lock:
+                                app.monitor["last_error"] = str(exc)
+                            raise
+                        app._record_notification(title, content, "miniprogram")
+                        return receipt
+
                     def send(self, title, content):
                         if event.is_set():
                             raise NotificationError("监控已停止，本次提醒取消")

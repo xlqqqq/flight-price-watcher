@@ -94,7 +94,8 @@ def run_cycle(settings: Settings, providers: dict, state: State, notifier=None,
     chunks, chunk, size = [], [], 0
     for entry in pending:
         block_size = len(entry[3].encode("utf-8")) + 8
-        if chunk and size + block_size > 9000:
+        if chunk and (size + block_size > 9000
+                      or getattr(notifier, "single_route_messages", False) is True):
             chunks.append(chunk)
             chunk, size = [], 0
         chunk.append(entry)
@@ -122,7 +123,11 @@ def run_cycle(settings: Settings, providers: dict, state: State, notifier=None,
         try:
             if notifier is None:
                 raise NotificationError("未配置微信推送器")
-            receipt = notifier.send(title, content)
+            if getattr(notifier, "single_route_messages", False) is True:
+                route, quote, _, _ = chunk[0]
+                receipt = notifier.send_quote(title, content, route, quote)
+            else:
+                receipt = notifier.send(title, content)
         except NotificationError as exc:
             LOG.error("微信推送未确认受理：%s；未记录为已提醒，下轮将重试。", exc)
             failed = True
